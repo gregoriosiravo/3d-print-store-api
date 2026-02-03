@@ -116,4 +116,42 @@ export class EmailService {
 
     await this.transporter.sendMail(mailOptions);
   }
+
+  /**
+   * Send order confirmation email
+   */
+  async sendOrderConfirmation(
+    email: string,
+    orderNumber: string,
+    totalAmount: number,
+  ): Promise<void> {
+    const mailOptions = {
+      from: process.env.EMAIL_FROM,
+      to: email,
+      subject: `Order Confirmation - ${orderNumber}`,
+      html: `
+        <!DOCTYPE html>
+        <html>
+        <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+          <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
+            <h2>Order Confirmation</h2>
+            <h3>Thank you for your order!</h3>
+            <p><strong>Order Number:</strong> ${orderNumber}</p>
+            <p><strong>Total Amount:</strong> $${totalAmount.toFixed(2)}</p>
+            <p>You can track your order status in your account.</p>
+            <p>Thank you for choosing 3D Print Shop!</p>
+          </div>
+        </body>
+        </html>
+      `,
+    };
+
+    try {
+      await this.transporter.sendMail(mailOptions);
+      console.log("✅ Order confirmation email sent to:", email);
+    } catch (error) {
+      console.error("❌ Failed to send order confirmation email:", error);
+      throw new Error("Failed to send order confirmation email");
+    }
+  }
 }

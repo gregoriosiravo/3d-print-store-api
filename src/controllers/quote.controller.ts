@@ -1,8 +1,8 @@
-import { Request, Response } from 'express';
-import { StlParserService } from '../services/stl-parser.service';
-import { PricingService } from '../services/pricing.service';
-import { pool } from '../config/database';
-import { v4 as uuidv4 } from 'uuid';
+import { Request, Response } from "express";
+import { StlParserService } from "../services/stl-parser.service";
+import { PricingService } from "../services/pricing.service";
+import { pool } from "../config/database";
+import { v4 as uuidv4 } from "uuid";
 
 const stlParser = new StlParserService();
 const pricingService = new PricingService();
@@ -14,21 +14,21 @@ export class QuoteController {
   async createQuote(req: Request, res: Response) {
     try {
       if (!req.file) {
-        return res.status(400).json({ error: 'No STL file uploaded' });
+        return res.status(400).json({ error: "No STL file uploaded" });
       }
 
       const { materialId, printConfigId } = req.body;
 
       if (!materialId || !printConfigId) {
-        return res.status(400).json({ 
-          error: 'materialId and printConfigId are required' 
+        return res.status(400).json({
+          error: "materialId and printConfigId are required",
         });
       }
 
       // Parse STL file
       const stlAnalysis = await stlParser.analyzeStlFile(
         req.file.path,
-        req.file.filename
+        req.file.filename,
       );
 
       // Calculate pricing
@@ -43,7 +43,7 @@ export class QuoteController {
       const expiresAt = new Date();
       expiresAt.setDate(expiresAt.getDate() + 7); // Expire in 7 days
 
-      const sessionId = req.headers['x-session-id'] || uuidv4();
+      const sessionId = req.headers["x-session-id"] || uuidv4();
 
       await pool.query(
         `INSERT INTO quotes (
@@ -55,13 +55,25 @@ export class QuoteController {
           estimated_print_time_minutes, status, expires_at
         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)`,
         [
-          quoteId, sessionId, stlAnalysis.filename, req.file.path,
-          stlAnalysis.volumeCm3, stlAnalysis.surfaceAreaCm2,
-          stlAnalysis.boundingBox.x, stlAnalysis.boundingBox.y, stlAnalysis.boundingBox.z,
-          materialId, printConfigId,
-          pricing.materialCost, pricing.machineCost, pricing.laborCost, pricing.totalPrice,
-          pricing.estimatedPrintTimeMinutes, 'pending', expiresAt
-        ]
+          quoteId,
+          sessionId,
+          stlAnalysis.filename,
+          req.file.path,
+          stlAnalysis.volumeCm3,
+          stlAnalysis.surfaceAreaCm2,
+          stlAnalysis.boundingBox.x,
+          stlAnalysis.boundingBox.y,
+          stlAnalysis.boundingBox.z,
+          materialId,
+          printConfigId,
+          pricing.materialCost,
+          pricing.machineCost,
+          pricing.laborCost,
+          pricing.totalPrice,
+          pricing.estimatedPrintTimeMinutes,
+          "pending",
+          expiresAt,
+        ],
       );
 
       // Return quote response
@@ -71,12 +83,11 @@ export class QuoteController {
         ...pricing,
         expiresAt,
       });
-
     } catch (error) {
-      console.error('Error creating quote:', error);
-      res.status(500).json({ 
-        error: 'Failed to process STL file',
-        details: error instanceof Error ? error.message : "Unknown error"
+      console.error("Error creating quote:", error);
+      res.status(500).json({
+        error: "Failed to process STL file",
+        details: error instanceof Error ? error.message : "Unknown error",
       });
     }
   }
@@ -88,19 +99,43 @@ export class QuoteController {
     try {
       const { quoteId } = req.params;
 
-      const result = await pool.query(
-        'SELECT * FROM quotes WHERE id = $1',
-        [quoteId]
-      );
+      const result = await pool.query("SELECT * FROM quotes WHERE id = $1", [
+        quoteId,
+      ]);
 
       if (result.rows.length === 0) {
-        return res.status(404).json({ error: 'Quote not found' });
+        return res.status(404).json({ error: "Quote not found" });
       }
 
       res.json(result.rows[0]);
     } catch (error) {
-      console.error('Error fetching quote:', error);
-      res.status(500).json({ error: 'Failed to fetch quote' });
+      console.error("Error fetching quote:", error);
+      res.status(500).json({ error: "Failed to fetch quote" });
+    }
+  }
+  /**
+   * Get all quotes for authenticated user
+   */
+  async getUserQuotes(req: Request, res: Response) {
+    try {
+      if (!req.user) {
+        return res.status(401).json({ error: "Not authenticated" });
+      }
+
+      const result = await pool.query(
+        `SELECT q.*, m.name as material_name, pc.name as config_name
+         FROM quotes q
+         LEFT JOIN materials m ON q.material_id = m.id
+         LEFT JOIN print_configs pc ON q.print_config_id = pc.id
+         WHERE q.user_id = $1
+         ORDER BY q.created_at DESC`,
+        [req.user.userId],
+      );
+
+      res.json({ quotes: result.rows });
+    } catch (error) {
+      console.error("Error fetching user quotes:", error);
+      res.status(500).json({ error: "Failed to fetch quotes" });
     }
   }
 }
