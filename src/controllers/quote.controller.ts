@@ -80,7 +80,14 @@ export class QuoteController {
       res.json({
         quoteId,
         ...stlAnalysis,
-        ...pricing,
+        pricing: {
+          materialCost: pricing.materialCost,
+          machineCost: pricing.machineCost,
+          laborCost: pricing.laborCost,
+          totalPrice: pricing.totalPrice,
+        },
+        materialWeightGrams: pricing.materialWeightGrams,
+        estimatedPrintTimeMinutes: pricing.estimatedPrintTimeMinutes,
         expiresAt,
       });
     } catch (error) {

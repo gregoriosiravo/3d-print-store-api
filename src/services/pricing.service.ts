@@ -47,7 +47,7 @@ export class PricingService {
     const boundingBoxZ = request.stlAnalysis.boundingBox.z * 10; // Convert cm to mm
 
     const numberOfLayers = boundingBoxZ / layerHeight;
-    const baseTimeMinutes = numberOfLayers * 0.5 * timeMultiplier; 
+    const baseTimeMinutes = numberOfLayers * 0.5 * timeMultiplier;
     const estimatedPrintTimeMinutes = Math.round(baseTimeMinutes);
 
     // Machine cost
@@ -72,6 +72,7 @@ export class PricingService {
       laborCost: parseFloat(laborCost.toFixed(2)),
       totalPrice: parseFloat(totalPrice.toFixed(2)),
       estimatedPrintTimeMinutes,
+      materialWeightGrams: parseFloat(materialWeightGrams.toFixed(2)),
     };
   }
 }

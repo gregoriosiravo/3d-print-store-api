@@ -21,6 +21,7 @@ export interface PricingBreakdown {
   machineCost: number;
   laborCost: number;
   totalPrice: number;
+  materialWeightGrams: number;
   estimatedPrintTimeMinutes: number;
 }
 
