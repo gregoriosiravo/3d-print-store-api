@@ -76,11 +76,9 @@ export class AuthController {
         (error.message === "Invalid verification token" ||
           error.message === "Verification token has expired")
       ) {
-        return res
-          .status(400)
-          .json({
-            error: error instanceof Error ? error.message : "Unknown error",
-          });
+        return res.status(400).json({
+          error: error instanceof Error ? error.message : "Unknown error",
+        });
       }
 
       res.status(500).json({ error: "Email verification failed" });
@@ -107,11 +105,9 @@ export class AuthController {
         (error.message === "User not found" ||
           error.message === "Email is already verified")
       ) {
-        return res
-          .status(400)
-          .json({
-            error: error instanceof Error ? error.message : "Unknown error",
-          });
+        return res.status(400).json({
+          error: error instanceof Error ? error.message : "Unknown error",
+        });
       }
 
       res.status(500).json({ error: "Failed to resend verification email" });
@@ -158,7 +154,7 @@ export class AuthController {
       }
 
       const result = await pool.query(
-        "SELECT id, email, first_name, last_name, created_at FROM users WHERE id = $1",
+        "SELECT id, email, first_name, last_name, username, created_at FROM users WHERE id = $1",
         [req.user.userId],
       );
 
@@ -171,9 +167,9 @@ export class AuthController {
       res.json({
         id: user.id,
         email: user.email,
-        username: user.username,
         firstName: user.first_name,
         lastName: user.last_name,
+        username: user.username,
         createdAt: user.created_at,
       });
     } catch (error) {
