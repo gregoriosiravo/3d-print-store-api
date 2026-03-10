@@ -70,13 +70,17 @@ export class AuthController {
       res.json(result);
     } catch (error) {
       console.error("Email verification error:", error);
-     
+
       if (
         error instanceof Error &&
         (error.message === "Invalid verification token" ||
-        error.message === "Verification token has expired")
+          error.message === "Verification token has expired")
       ) {
-        return res.status(400).json({ error: error instanceof Error ? error.message : "Unknown error" });
+        return res
+          .status(400)
+          .json({
+            error: error instanceof Error ? error.message : "Unknown error",
+          });
       }
 
       res.status(500).json({ error: "Email verification failed" });
@@ -101,9 +105,13 @@ export class AuthController {
       if (
         error instanceof Error &&
         (error.message === "User not found" ||
-        error.message === "Email is already verified")        
+          error.message === "Email is already verified")
       ) {
-        return res.status(400).json({ error: error instanceof Error ? error.message : "Unknown error" });
+        return res
+          .status(400)
+          .json({
+            error: error instanceof Error ? error.message : "Unknown error",
+          });
       }
 
       res.status(500).json({ error: "Failed to resend verification email" });
@@ -163,6 +171,7 @@ export class AuthController {
       res.json({
         id: user.id,
         email: user.email,
+        username: user.username,
         firstName: user.first_name,
         lastName: user.last_name,
         createdAt: user.created_at,

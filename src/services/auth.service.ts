@@ -10,6 +10,13 @@ import {
 } from "../types/auth.types";
 import { EmailService } from "./email.service";
 import crypto from "crypto";
+import {
+  uniqueNamesGenerator,
+  Config,
+  adjectives,
+  colors,
+  animals,
+} from "unique-names-generator";
 
 export class AuthService {
   private readonly SALT_ROUNDS = 10;
@@ -38,16 +45,24 @@ export class AuthService {
     const verificationTokenExpires = new Date();
     verificationTokenExpires.setHours(verificationTokenExpires.getHours() + 24);
 
+    const customConfig: Config = {
+      dictionaries: [adjectives, colors],
+      separator: "-",
+      length: 2,
+    };
+
+    const randomUserName: string = uniqueNamesGenerator(customConfig);
     // Insert new user
     const result = await pool.query(
-      `INSERT INTO users (email, password_hash, first_name, last_name, email_verified, verification_token, verification_token_expires)
-       VALUES ($1, $2, $3, $4, false, $5, $6)
-       RETURNING id, email, first_name, last_name`,
+      `INSERT INTO users (email, password_hash, first_name, last_name, username, email_verified, verification_token, verification_token_expires)
+       VALUES ($1, $2, $3, $4, $5, false, $6, $7)
+       RETURNING id, email, first_name, last_name, username`,
       [
         data.email,
         passwordHash,
         data.firstName || null,
         data.lastName || null,
+        randomUserName,
         verificationToken,
         verificationTokenExpires,
       ],
