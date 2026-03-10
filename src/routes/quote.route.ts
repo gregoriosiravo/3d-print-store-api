@@ -52,4 +52,10 @@ router.get(
   quoteController.getUserQuotes.bind(quoteController),
 );
 
+router.post(
+  "/quote/associate",
+  authenticate,
+  quoteController.associateQuoteWithUser.bind(quoteController),
+);
+
 export default router;

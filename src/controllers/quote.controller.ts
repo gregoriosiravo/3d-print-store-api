@@ -145,4 +145,29 @@ export class QuoteController {
       res.status(500).json({ error: "Failed to fetch quotes" });
     }
   }
+  /**
+   * Associate quote with user after authentication (for guests who later log in)
+   */
+  async associateQuoteWithUser(req: Request, res: Response) {
+    try {
+      if (!req.user) {
+        return res.status(401).json({ error: "Not authenticated" });
+      }
+
+      const result = await pool.query(
+        `UPDATE quotes SET user_id = $1 WHERE id = $2 AND user_id IS NULL`,
+        [req.body.userId, req.body.quoteId],
+      );
+      if (result.rowCount === 0) {
+        return res
+          .status(404)
+          .json({ error: "Quote not found or already associated" });
+      }
+
+      return res.status(200).json({ message: "Quote associated successfully" });
+    } catch (error) {
+      console.error("Error associating quote with user:", error);
+      res.status(500).json({ error: "Failed to associate quote with user" });
+    }
+  }
 }
