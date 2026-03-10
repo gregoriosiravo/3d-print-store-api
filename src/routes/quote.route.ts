@@ -58,4 +58,16 @@ router.post(
   quoteController.associateQuoteWithUser.bind(quoteController),
 );
 
+router.post(
+  "/quote/:quoteId/approve",
+  authenticate,
+  quoteController.approveQuote.bind(quoteController),
+);
+
+router.post(
+  "/quote/:quoteId/reject",
+  authenticate,
+  quoteController.rejectQuote.bind(quoteController),
+);
+
 export default router;

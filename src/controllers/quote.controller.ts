@@ -3,6 +3,7 @@ import { StlParserService } from "../services/stl-parser.service";
 import { PricingService } from "../services/pricing.service";
 import { pool } from "../config/database";
 import { v4 as uuidv4 } from "uuid";
+import { OrderService } from "../services/order.service";
 
 const stlParser = new StlParserService();
 const pricingService = new PricingService();
@@ -168,6 +169,62 @@ export class QuoteController {
     } catch (error) {
       console.error("Error associating quote with user:", error);
       res.status(500).json({ error: "Failed to associate quote with user" });
+    }
+  }
+
+  /**
+   * Reject quote by user action
+   */
+  async rejectQuote(req: Request, res: Response) {
+    try {
+      if (!req.user) {
+        return res.status(401).json({ error: "Not authenticated" });
+      }
+      const { quoteId } = req.params;
+      const result = await pool.query(
+        `DELETE FROM quotes WHERE id = $1 AND user_id = $2`,
+        [quoteId, req.user.userId],
+      );
+      if (result.rowCount === 0) {
+        return res
+          .status(404)
+          .json({ error: "Quote not found or not owned by user" });
+      }
+      res.json({ message: "Quote declined successfully" });
+    } catch (error) {
+      console.error("Error declining quote:", error);
+      res.status(500).json({ error: "Failed to decline quote" });
+    }
+  }
+  /**
+   * Approve quote by user action (could be extended to create an order)
+   */
+  async approveQuote(req: Request, res: Response) {
+    try {
+      if (!req.user) {
+        return res.status(401).json({ error: "Not authenticated" });
+      }
+      const quoteId = Array.isArray(req.params.quoteId)
+        ? req.params.quoteId[0]
+        : req.params.quoteId;
+      const result = await pool.query(
+        `UPDATE quotes SET status = 'accepted' WHERE id = $1 AND user_id = $2`,
+        [quoteId, req.user.userId],
+      );
+      OrderService.createOrderFromQuote(
+        req.user.userId,
+        quoteId,
+        req.body.totalPrice,
+      );
+      if (result.rowCount === 0) {
+        return res
+          .status(404)
+          .json({ error: "Quote not found or not owned by user" });
+      }
+      res.json({ message: "Quote approved successfully" });
+    } catch (error) {
+      console.error("Error approving quote:", error);
+      res.status(500).json({ error: "Failed to approve quote" });
     }
   }
 }

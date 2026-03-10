@@ -208,4 +208,53 @@ export class OrderService {
       `✅ Order ${orderId} payment status updated to: ${paymentStatus}`,
     );
   }
+
+  /**
+   * Create order from quote (used when accepting quote)
+   */
+  static async createOrderFromQuote(
+    userId: string,
+    quoteId: string,
+    totalPrice: number,
+  ): Promise<void> {
+    const client = await pool.connect();
+
+    try {
+      await client.query("BEGIN");
+
+      const date = new Date();
+      const dateStr = date.toISOString().slice(0, 10).replace(/-/g, "");
+      const randomNum = Math.floor(1000 + Math.random() * 9000);
+      const orderNumber = `ORD-${dateStr}-${randomNum}`;
+
+      await client.query(
+        `INSERT INTO orders (
+          user_id, quote_id, order_number, total_amount, status, payment_status,
+          shipping_name, shipping_address, shipping_city, shipping_postal_code, shipping_country
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+        [
+          userId,
+          quoteId,
+          orderNumber,
+          totalPrice,
+          "pending",
+          "pending",
+          null,
+          null,
+          null,
+          null,
+          null,
+        ],
+      );
+
+      await client.query("COMMIT");
+
+      console.log(`✅ Order created from quote ${quoteId} for user ${userId}`);
+    } catch (error) {
+      await client.query("ROLLBACK");
+      console.error("Error creating order from quote:", error);
+    } finally {
+      client.release();
+    }
+  }
 }
