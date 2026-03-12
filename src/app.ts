@@ -1,11 +1,13 @@
 import express, { Application } from "express";
 import cors from "cors";
 import dotenv from "dotenv";
+dotenv.config();
+
+import { stripe } from "./config/stripe";
 import quoteRoutes from "./routes/quote.route";
 import authRoutes from "./routes/auth.route";
 import ordersRoutes from "./routes/order.route";
-
-dotenv.config();
+import webhookRouter from "./routes/webhook.route";
 
 const app: Application = express();
 
@@ -15,6 +17,8 @@ app.use(
     origin: process.env.FRONTEND_URL || "http://localhost:3000",
   }),
 );
+app.use("/api/webhooks", webhookRouter);
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 

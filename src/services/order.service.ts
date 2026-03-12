@@ -191,17 +191,19 @@ export class OrderService {
 
   /**
    * Update payment status
+   * paymentMethod is optional and can be used to store info about the payment method used (e.g. "stripe", "paypal", etc.)
    */
   async updatePaymentStatus(
     orderId: string,
     paymentStatus: string,
+    paymentMethod: string,
     paymentId?: string,
   ): Promise<void> {
     await pool.query(
       `UPDATE orders 
-       SET payment_status = $1, payment_id = $2, updated_at = CURRENT_TIMESTAMP 
-       WHERE id = $3`,
-      [paymentStatus, paymentId, orderId],
+       SET status = $1 ,payment_status = $1, payment_id = $2, payment_method = $3, updated_at = CURRENT_TIMESTAMP 
+       WHERE id = $4`,
+      [paymentStatus, paymentId, paymentMethod, orderId],
     );
 
     console.log(
@@ -256,5 +258,34 @@ export class OrderService {
     } finally {
       client.release();
     }
+  }
+
+  async updateShippingAddress(orderId: string, address: any): Promise<void> {
+    const name = address.name + " " + address.surname;
+    const street = address.address;
+    const addressInfo = address.addressInfo;
+    const city = address.city;
+    const postalCode = address.zip;
+    const country = address.country;
+    await pool.query(
+      `UPDATE orders 
+       SET shipping_name = $1, shipping_address = $2, shipping_city = $3, shipping_postal_code = $4, shipping_country = $5, updated_at = CURRENT_TIMESTAMP 
+       WHERE id = $6`,
+      [name, street, city, postalCode, country, orderId],
+    );
+    const userAddrInfo = await pool.query(
+      `SELECT address, city, zip, address_info, country FROM users where id = (SELECT user_id FROM orders WHERE id = $1)`,
+      [orderId],
+    );
+    if (userAddrInfo.rows.length > 0) {
+      const userAddr = userAddrInfo.rows[0];
+      await pool.query(
+        `UPDATE users 
+         SET address = $1, city = $2, zip = $3, address_info = $4, country = $5, updated_at = CURRENT_TIMESTAMP 
+         WHERE id = (SELECT user_id FROM orders WHERE id = $6)`,
+        [street, city, postalCode, addressInfo, country, orderId],
+      );
+    }
+    console.log(`✅ Order ${orderId} shipping address updated`);
   }
 }

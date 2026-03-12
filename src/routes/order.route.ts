@@ -17,4 +17,14 @@ router.get(
   orderController.getUserOrders.bind(orderController),
 );
 
+router.post(
+  "/orders/:orderId/pay",
+  authenticate,
+  orderController.payUserOrder.bind(orderController),
+);
+router.patch(
+  "/orders/:orderId/address",
+  authenticate,
+  orderController.updateShippingAddress.bind(orderController),
+);
 export default router;

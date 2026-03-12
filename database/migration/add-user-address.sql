@@ -1,0 +1,6 @@
+ALTER TABLE users 
+ADD COLUMN address varchar(255),
+ADD COLUMN address_info varchar(255),
+ADD COLUMN city VARCHAR(255),
+ADD COLUMN state VARCHAR(255),
+ADD COLUMN zip VARCHAR(20);
