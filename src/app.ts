@@ -7,6 +7,7 @@ import { stripe } from "./config/stripe";
 import quoteRoutes from "./routes/quote.route";
 import authRoutes from "./routes/auth.route";
 import ordersRoutes from "./routes/order.route";
+import addressRouter from "./routes/address.route";
 import webhookRouter from "./routes/webhook.route";
 
 const app: Application = express();
@@ -31,6 +32,7 @@ app.get("/health", (req, res) => {
 app.use("/api", quoteRoutes);
 app.use("/api/auth", authRoutes);
 app.use("/api", ordersRoutes);
+app.use("/api", addressRouter);
 // app.use('/api/products', productsRouter);
 
 export default app;

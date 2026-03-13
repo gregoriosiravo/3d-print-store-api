@@ -1,6 +1,8 @@
 import { pool } from "../config/database";
 import { AcceptQuoteRequest, OrderResponse } from "../types/order.types";
 import { EmailService } from "./email.service";
+import { AddressService } from "./address.service";
+import { Address } from "../types/address.types";
 
 export class OrderService {
   private emailService: EmailService;
@@ -261,31 +263,42 @@ export class OrderService {
   }
 
   async updateShippingAddress(orderId: string, address: any): Promise<void> {
+    let addressService = new AddressService();
     const name = address.name + " " + address.surname;
     const street = address.address;
     const addressInfo = address.addressInfo;
     const city = address.city;
     const postalCode = address.zip;
     const country = address.country;
+    const isPrimary = address.default;
+
     await pool.query(
       `UPDATE orders 
        SET shipping_name = $1, shipping_address = $2, shipping_city = $3, shipping_postal_code = $4, shipping_country = $5, updated_at = CURRENT_TIMESTAMP 
        WHERE id = $6`,
       [name, street, city, postalCode, country, orderId],
     );
-    const userAddrInfo = await pool.query(
-      `SELECT address, city, zip, address_info, country FROM users where id = (SELECT user_id FROM orders WHERE id = $1)`,
+    const userId = await pool.query(
+      `SELECT user_id FROM orders WHERE id = $1`,
       [orderId],
     );
-    if (userAddrInfo.rows.length > 0) {
-      const userAddr = userAddrInfo.rows[0];
-      await pool.query(
-        `UPDATE users 
-         SET address = $1, city = $2, zip = $3, address_info = $4, country = $5, updated_at = CURRENT_TIMESTAMP 
-         WHERE id = (SELECT user_id FROM orders WHERE id = $6)`,
-        [street, city, postalCode, addressInfo, country, orderId],
-      );
+    const userAddrInfo = await addressService.checkAddressForUserOrder(
+      userId.rows[0].user_id,
+    );
+    if (userAddrInfo.length === 0) {
+      let addressData: Address = {
+        firstName: address.name,
+        lastName: address.surname,
+        address: street,
+        addressInfo: addressInfo,
+        city: city,
+        zip: postalCode,
+        country: country,
+        isPrimary: isPrimary,
+      };
+      addressService.addAddress(userId.rows[0].user_id, addressData);
+
+      console.log(`✅ Order ${orderId} shipping address updated`);
     }
-    console.log(`✅ Order ${orderId} shipping address updated`);
   }
 }
