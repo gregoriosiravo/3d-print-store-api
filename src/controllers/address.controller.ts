@@ -51,12 +51,10 @@ export class AddressController {
         await this.addressService.addAddress(userId, addressData);
         res.status(201).json({ message: "Address added successfully" });
       } catch (error) {
-        res
-          .status(400)
-          .json({
-            error:
-              error instanceof Error ? error.message : "Invalid address data",
-          });
+        res.status(400).json({
+          error:
+            error instanceof Error ? error.message : "Invalid address data",
+        });
       }
     } catch (error) {
       console.error(
@@ -115,6 +113,43 @@ export class AddressController {
         error instanceof Error ? error.message : "Unknown error",
       );
       res.status(500).json({ error: "Failed to set primary address" });
+    }
+  }
+  async editAddress(req: Request, res: Response) {
+    try {
+      if (!req.user) {
+        return res
+          .status(401)
+          .json({ error: "Not Authenticated, Please log in first!" });
+      }
+      const userId = req.params.userId;
+      const addressId = req.params.addressId;
+      if (req.user.userId !== userId) {
+        return res.status(403).json({
+          error:
+            "Forbidden, You can only edit addresses from your own account!",
+        });
+      }
+      const addressData = req.body as Address;
+      try {
+        await this.addressService.editAddress(
+          userId,
+          addressId as string,
+          addressData,
+        );
+        res.status(200).json({ message: "Address edited successfully" });
+      } catch (error) {
+        res.status(400).json({
+          error:
+            error instanceof Error ? error.message : "Invalid address data",
+        });
+      }
+    } catch (error) {
+      console.error(
+        "Error editing address:",
+        error instanceof Error ? error.message : "Unknown error",
+      );
+      res.status(500).json({ error: "Failed to edit address" });
     }
   }
 }

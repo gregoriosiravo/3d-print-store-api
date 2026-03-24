@@ -26,4 +26,9 @@ router.delete(
   authenticate,
   addressController.deleteAddress.bind(addressController),
 );
+router.put(
+  "/address/:userId/edit/:addressId",
+  authenticate,
+  addressController.editAddress.bind(addressController),
+);
 export default router;

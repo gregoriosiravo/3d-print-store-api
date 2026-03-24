@@ -101,4 +101,57 @@ export class AddressService {
       );
     }
   }
+  /**
+   * Edit an existing address for a user
+   */
+  async editAddress(
+    userId: string,
+    addressId: string,
+    addressData: Address,
+  ): Promise<void> {
+    const {
+      firstName,
+      lastName,
+      address,
+      addressInfo,
+      city,
+      zip,
+      country,
+      isPrimary,
+    } = addressData;
+
+    try {
+      await pool.query(
+        `UPDATE addresses SET
+         first_name = $1,
+         last_name = $2,
+         address = $3,
+         city = $4,
+         zip = $5,
+         address_info = $6,
+         country = $7,
+         is_primary = $8,
+         updated_at = CURRENT_TIMESTAMP
+       WHERE id = $9 AND user_id = $10`,
+        [
+          firstName,
+          lastName,
+          address,
+          city,
+          zip,
+          addressInfo,
+          country,
+          isPrimary,
+          addressId,
+          userId,
+        ],
+      );
+      console.log(`Address ${addressId} edited for user ${userId}`);
+    } catch (error) {
+      console.error(
+        `Error editing address ${addressId} for user ${userId}:`,
+        error,
+      );
+    }
+  }
 }
