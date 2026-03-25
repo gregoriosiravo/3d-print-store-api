@@ -119,7 +119,18 @@ export class AddressService {
       country,
       isPrimary,
     } = addressData;
-
+    if (isPrimary) {
+      try {
+        await pool.query(
+          `UPDATE addresses SET
+           is_primary = false
+           WHERE is_primary = true AND user_id = $1`,
+          [userId],
+        );
+      } catch (error) {
+        console.error(error);
+      }
+    }
     try {
       await pool.query(
         `UPDATE addresses SET
