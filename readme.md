@@ -40,6 +40,7 @@ git clone https://github.com/yourusername/3dprint-store.git
 cd 3dprint-store/3d-print-shop-api
 
 npm install
+npx prisma init --datasource-provider postgresql
 
 cp .env.example .env
 # Edit .env with your configuration

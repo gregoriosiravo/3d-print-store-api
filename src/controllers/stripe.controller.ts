@@ -1,5 +1,5 @@
 import { Request, Response } from "express";
-import { stripe } from "../config/stripe"; // your stripe instance
+import { stripe } from "../config/stripe";
 import { OrderService } from "../services/order.service";
 
 const orderService = new OrderService();
@@ -20,11 +20,11 @@ export const webhookController = {
       console.error("Webhook signature verification failed:", err);
       return res.status(400).json({ error: "Invalid signature" });
     }
-    console.log("📦 Webhook event type:", event.type); // ✅ add this
+    console.log("📦 Webhook event type:", event.type);
     console.log(
       "📦 Webhook event data:",
       JSON.stringify(event.data.object, null, 2),
-    ); // ✅ and this
+    );
 
     if (event.type === "payment_intent.succeeded") {
       const paymentIntent = event.data.object;
