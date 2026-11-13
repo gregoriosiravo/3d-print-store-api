@@ -9,9 +9,18 @@ import authRoutes from "./routes/auth.route";
 import ordersRoutes from "./routes/order.route";
 import addressRouter from "./routes/address.route";
 import paymentMethodRouter from "./routes/payment-method.route";
+import catalogRouter from "./routes/catalog.route";
 import webhookRouter from "./routes/webhook.route";
 
 const app: Application = express();
+
+// TRUST_PROXY is a hop count (e.g. 1 behind one reverse proxy), so the upload rate limit
+// sees the client address rather than the proxy's
+const trustProxy = process.env.TRUST_PROXY;
+app.set(
+  "trust proxy",
+  trustProxy === undefined ? false : /^\d+$/.test(trustProxy) ? Number(trustProxy) : trustProxy,
+);
 
 // Middleware
 app.use(
@@ -36,6 +45,7 @@ app.use("/api/auth", authRoutes);
 app.use("/api", ordersRoutes);
 app.use("/api", addressRouter);
 app.use("/api", paymentMethodRouter);
+app.use("/api", catalogRouter);
 
 // Errors from middleware (upload, JSON body): JSON, never the default HTML page
 app.use((err: any, req: Request, res: Response, next: NextFunction) => {
