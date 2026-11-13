@@ -325,6 +325,28 @@ export class OrderService {
   }
 
   /**
+   * Ask for a refund of a paid order. The customer cannot refund directly once paid
+   * (cancelling a paid order is refused), so the request is recorded for review.
+   */
+  async requestRefund(userId: string, orderId: string): Promise<void> {
+    const order = await this.getOrder(userId, orderId);
+    if (!order) {
+      throw new HttpError(404, "Order not found");
+    }
+    if (order.payment_status !== "paid") {
+      throw new HttpError(409, "Only a paid order can be refunded");
+    }
+    if (["cancelled", "shipped", "completed"].includes(order.status)) {
+      throw new HttpError(409, "This order can no longer be refunded");
+    }
+    await pool.query(
+      `UPDATE orders SET payment_status = 'refund_requested', updated_at = CURRENT_TIMESTAMP
+       WHERE id = $1 AND user_id = $2 AND payment_status = 'paid'`,
+      [orderId, userId],
+    );
+  }
+
+  /**
    * Update order status
    */
   async updateOrderStatus(orderId: string, status: string): Promise<void> {

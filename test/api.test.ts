@@ -262,6 +262,20 @@ describe("orders", () => {
     assert.equal((await call("POST", `/orders/${order.orderId}/confirm-payment`, { token: alice.token })).status, 200);
   });
 
+  it("a paid order can request one refund; unpaid orders cannot", async () => {
+    const quote = await ownQuote();
+    const order = (await call("POST", `/quote/${quote.quoteId}/approve`, { token: alice.token })).body;
+    assert.equal((await call("POST", `/orders/${order.orderId}/refund-request`, { token: alice.token })).status, 409);
+
+    await db.query("UPDATE orders SET payment_status = 'paid' WHERE id = $1", [order.orderId]);
+    const requested = await call("POST", `/orders/${order.orderId}/refund-request`, { token: alice.token });
+    assert.equal(requested.status, 200);
+    const row = await db.query("SELECT payment_status FROM orders WHERE id = $1", [order.orderId]);
+    assert.equal(row.rows[0].payment_status, "refund_requested");
+    assert.equal((await call("POST", `/orders/${order.orderId}/refund-request`, { token: alice.token })).status, 409);
+    assert.equal((await call("POST", `/orders/${order.orderId}/refund-request`, { token: bob.token })).status, 404);
+  });
+
   it("order routes return 404 for malformed IDs and for other users' orders", async () => {
     assert.equal((await call("GET", "/orders?orderId=abc", { token: alice.token })).status, 404);
     assert.equal((await call("POST", "/orders/abc/cancel", { token: alice.token })).status, 404);

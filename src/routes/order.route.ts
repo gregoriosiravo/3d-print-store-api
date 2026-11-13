@@ -38,4 +38,10 @@ router.post(
   orderController.confirmUserPayment.bind(orderController),
 );
 
+router.post(
+  "/orders/:orderId/refund-request",
+  authenticate,
+  orderController.requestUserRefund.bind(orderController),
+);
+
 export default router;

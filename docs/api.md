@@ -73,6 +73,7 @@ A pending quote past `expires_at` becomes `expired`. This happens at startup and
 | GET | `/orders` | Bearer | optional `?orderId=` | 200 array, or one order when `orderId` is given | 404 for `orderId` (not found, not owned, or malformed) |
 | POST | `/orders/:orderId/cancel` | Bearer | none | 200 `{ message }`. A paid order is refunded through Stripe in the same request | 404 order not found, not owned, or malformed ID; 409 already cancelled, shipped or completed, or a paid order with no payment on record; 400 Stripe refused the refund (for example the payment cannot be refunded) |
 | POST | `/orders/:orderId/pay` | Bearer | none | 200 `{ clientSecret }`. Stripe is asked about the order's current PaymentIntent first: an open one is reused; one that has succeeded marks the order paid and is refused; a cancelled one is replaced | 404 order not found or not owned, 400 `Order is already paid`, 500 Stripe failure |
+| POST | `/orders/:orderId/refund-request` | Bearer | none | 200 `{ paymentStatus: "refund_requested" }`. Records a refund request for review; the order is not refunded automatically | 404 not found or not owned; 409 the order is not paid, or is cancelled, shipped or completed |
 | POST | `/orders/:orderId/confirm-payment` | Bearer | none | 200 `{ paymentStatus: "paid" }` | 404; 409 no payment started, or Stripe has not reported success; 400 the payment's amount, currency or order does not match |
 | PATCH | `/orders/:orderId/address` | Bearer | address (below) | 200 `{ message }` | 400 invalid address, 404 order not found or not owned |
 

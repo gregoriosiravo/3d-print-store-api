@@ -110,6 +110,22 @@ export class OrderController {
     }
   }
 
+  async requestUserRefund(req: Request, res: Response) {
+    if (!req.user) {
+      return res.status(401).json({ error: "Not authenticated" });
+    }
+    const { orderId } = req.params as { orderId: string };
+    if (!isUuid(orderId)) {
+      return res.status(404).json({ error: "Order not found" });
+    }
+    try {
+      await orderService.requestRefund(req.user.userId, orderId);
+      res.json({ paymentStatus: "refund_requested" });
+    } catch (error) {
+      sendError(res, error, "Failed to request refund");
+    }
+  }
+
   // Called by the checkout page after Stripe reports success
   async confirmUserPayment(req: Request, res: Response) {
     if (!req.user) {
