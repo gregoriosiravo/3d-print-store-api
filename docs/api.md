@@ -111,7 +111,7 @@ Accept-quote and approve response:
 
 `totalAmount` is the price stored on the quote. The request cannot change it.
 
-`/orders/:orderId/pay` creates (or reuses) a Stripe PaymentIntent, and stores its ID on the order for `Math.round(total_amount * 100)` cents in EUR, with the order ID in its metadata and `allow_redirects: never`. The client confirms it with Stripe.js and the secret.
+`/orders/:orderId/pay` creates (or reuses) a Stripe PaymentIntent for the user's Stripe customer (so their saved cards can be used), and stores its ID on the order for `Math.round(total_amount * 100)` cents in EUR, with the order ID in its metadata and `allow_redirects: never`. The client confirms it with Stripe.js and the secret.
 
 ### Addresses (`/api/address/:userId`)
 
@@ -148,6 +148,7 @@ Card object returned by the list:
 ```json
 {
   "id": "uuid",
+  "stripePaymentMethodId": "pm_...",
   "brand": "visa",
   "last4": "4242",
   "expMonth": 9,

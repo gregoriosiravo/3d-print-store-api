@@ -15,6 +15,7 @@ export interface SavePaymentMethodBody {
 
 export interface PaymentMethodDto {
   id: string;
+  stripePaymentMethodId: string;
   brand: string | null;
   last4: string | null;
   expMonth: number | null;

@@ -132,7 +132,7 @@ export class PaymentMethodsService {
 
   async listPaymentMethods(userId: string): Promise<PaymentMethodDto[]> {
     const result = await pool.query(
-      `SELECT id, brand, last4, exp_month, exp_year, is_default, created_at
+      `SELECT id, stripe_payment_method_id, brand, last4, exp_month, exp_year, is_default, created_at
        FROM payment_methods
        WHERE user_id = $1
        ORDER BY is_default DESC, created_at DESC`,
@@ -141,6 +141,8 @@ export class PaymentMethodsService {
 
     return result.rows.map((row) => ({
       id: row.id,
+      // Stripe's reference, needed to pay with this card; not a secret
+      stripePaymentMethodId: row.stripe_payment_method_id,
       brand: row.brand,
       last4: row.last4,
       expMonth: row.exp_month,

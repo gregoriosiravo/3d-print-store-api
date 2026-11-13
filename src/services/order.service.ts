@@ -201,6 +201,12 @@ export class OrderService {
       throw new HttpError(400, "Order is already paid");
     }
     const amount = Math.round(Number(order.total_amount) * 100);
+    // Saved cards belong to this Stripe customer; the payment must be made for the same customer
+    const customerResult = await pool.query(
+      "SELECT stripe_customer_id FROM users WHERE id = $1",
+      [userId],
+    );
+    const customer: string | null = customerResult.rows[0]?.stripe_customer_id ?? null;
 
     if (order.payment_id) {
       const current = await stripe.paymentIntents.retrieve(order.payment_id);
@@ -208,7 +214,12 @@ export class OrderService {
         await this.confirmPayment(userId, orderId);
         throw new HttpError(400, "Order is already paid");
       }
-      if (current.status !== "canceled" && current.amount === amount && current.client_secret) {
+      if (
+        current.status !== "canceled" &&
+        current.amount === amount &&
+        (current.customer ?? null) === customer &&
+        current.client_secret
+      ) {
         return current.client_secret;
       }
     }
@@ -218,6 +229,7 @@ export class OrderService {
       {
         amount,
         currency: "eur",
+        customer: customer ?? undefined,
         metadata: { orderId },
         automatic_payment_methods: { enabled: true, allow_redirects: "never" },
       },
