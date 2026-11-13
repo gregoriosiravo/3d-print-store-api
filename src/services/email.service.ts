@@ -1,5 +1,17 @@
 import nodemailer from "nodemailer";
-import { Transporter } from "nodemailer";
+import { SendMailOptions, Transporter } from "nodemailer";
+
+// RFC 2606 reserved domains can never receive mail; sending to them only uses the SMTP quota
+const RESERVED_DOMAINS = ["example.com", "example.net", "example.org"];
+const RESERVED_SUFFIXES = [".test", ".invalid", ".localhost", ".example"];
+
+function isReservedAddress(email: string): boolean {
+  const domain = email.split("@").pop()?.toLowerCase() ?? "";
+  return (
+    RESERVED_DOMAINS.includes(domain) ||
+    RESERVED_SUFFIXES.some((suffix) => domain.endsWith(suffix))
+  );
+}
 
 export class EmailService {
   private transporter: Transporter;
@@ -14,6 +26,15 @@ export class EmailService {
         pass: process.env.SMTP_PASSWORD,
       },
     });
+  }
+
+  private async send(mailOptions: SendMailOptions) {
+    const to = String(mailOptions.to);
+    if (isReservedAddress(to)) {
+      console.log(`Email to ${to} not sent: reserved test domain`);
+      return;
+    }
+    await this.transporter.sendMail(mailOptions);
   }
 
   /**
@@ -75,7 +96,7 @@ export class EmailService {
     };
 
     try {
-      await this.transporter.sendMail(mailOptions);
+      await this.send(mailOptions);
       console.log("✅ Verification email sent to:", email);
     } catch (error) {
       console.error("❌ Failed to send verification email:", error);
@@ -114,7 +135,7 @@ export class EmailService {
       `,
     };
 
-    await this.transporter.sendMail(mailOptions);
+    await this.send(mailOptions);
   }
 
   /**
@@ -147,7 +168,7 @@ export class EmailService {
     };
 
     try {
-      await this.transporter.sendMail(mailOptions);
+      await this.send(mailOptions);
       console.log("✅ Order confirmation email sent to:", email);
     } catch (error) {
       console.error("❌ Failed to send order confirmation email:", error);
