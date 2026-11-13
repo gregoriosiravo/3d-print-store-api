@@ -4,26 +4,9 @@ import { stripe } from "../config/stripe";
 import { HttpError } from "../utils/http-error";
 import { ShippingAddress } from "../types/order.types";
 import { isUuid } from "../utils/is-uuid";
+import { hasAddressFields } from "../utils/address-fields";
 
 const orderService = new OrderService();
-
-const REQUIRED_SHIPPING_FIELDS: (keyof ShippingAddress)[] = [
-  "firstName",
-  "lastName",
-  "address",
-  "city",
-  "zip",
-  "country",
-];
-
-function hasShippingFields(body: unknown): body is ShippingAddress {
-  if (!body || typeof body !== "object") return false;
-  return REQUIRED_SHIPPING_FIELDS.every(
-    (field) =>
-      typeof (body as Record<string, unknown>)[field] === "string" &&
-      ((body as Record<string, unknown>)[field] as string).trim() !== "",
-  );
-}
 
 function sendError(res: Response, error: unknown, fallback: string) {
   if (error instanceof HttpError) {
@@ -48,7 +31,7 @@ export class OrderController {
     if (!isUuid(quoteId)) {
       return res.status(400).json({ error: "quoteId must be a UUID" });
     }
-    if (shippingAddress && !hasShippingFields(shippingAddress)) {
+    if (shippingAddress && !hasAddressFields(shippingAddress)) {
       return res.status(400).json({
         error:
           "shippingAddress needs firstName, lastName, address, city, zip and country",
@@ -124,11 +107,27 @@ export class OrderController {
     }
   }
 
+  async cancelUserOrder(req: Request, res: Response) {
+    if (!req.user) {
+      return res.status(401).json({ error: "Not authenticated" });
+    }
+    const { orderId } = req.params as { orderId: string };
+    if (!isUuid(orderId)) {
+      return res.status(404).json({ error: "Order not found" });
+    }
+    try {
+      await orderService.cancelOrder(req.user.userId, orderId);
+      res.json({ message: "Order cancelled" });
+    } catch (error) {
+      sendError(res, error, "Failed to cancel order");
+    }
+  }
+
   async updateShippingAddress(req: Request, res: Response) {
     if (!req.user) {
       return res.status(401).json({ error: "Not authenticated" });
     }
-    if (!hasShippingFields(req.body)) {
+    if (!hasAddressFields(req.body)) {
       return res.status(400).json({
         error:
           "shippingAddress needs firstName, lastName, address, city, zip and country",

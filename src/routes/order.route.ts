@@ -27,4 +27,9 @@ router.patch(
   authenticate,
   orderController.updateShippingAddress.bind(orderController),
 );
+router.post(
+  "/orders/:orderId/cancel",
+  authenticate,
+  orderController.cancelUserOrder.bind(orderController),
+);
 export default router;

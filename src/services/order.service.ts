@@ -47,12 +47,12 @@ export class OrderService {
         throw new HttpError(403, "Unauthorized to accept this quote");
       }
 
-      if (quote.status !== "pending") {
-        throw new HttpError(409, "Quote has already been used for an order");
+      if (quote.status === "expired" || new Date() > new Date(quote.expires_at)) {
+        throw new HttpError(410, "Quote has expired");
       }
 
-      if (new Date() > new Date(quote.expires_at)) {
-        throw new HttpError(410, "Quote has expired");
+      if (quote.status !== "pending") {
+        throw new HttpError(409, "Quote has already been used for an order");
       }
 
       const date = new Date();
@@ -186,6 +186,32 @@ export class OrderService {
   }
 
   /**
+   * Cancel an unpaid order the user owns. Paid orders need a refund, which is not built yet.
+   */
+  async cancelOrder(userId: string, orderId: string): Promise<void> {
+    const result = await pool.query(
+      `UPDATE orders
+       SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP
+       WHERE id = $1 AND user_id = $2
+         AND payment_status <> 'paid'
+         AND status NOT IN ('cancelled', 'shipped', 'completed')`,
+      [orderId, userId],
+    );
+    if (result.rowCount) return;
+
+    const order = await this.getOrder(userId, orderId);
+    if (!order) {
+      throw new HttpError(404, "Order not found");
+    }
+    throw new HttpError(
+      409,
+      order.payment_status === "paid"
+        ? "Paid orders cannot be cancelled"
+        : "Order can no longer be cancelled",
+    );
+  }
+
+  /**
    * Update order status
    */
   async updateOrderStatus(orderId: string, status: string): Promise<void> {
@@ -252,20 +278,23 @@ export class OrderService {
       throw new HttpError(404, "Order not found");
     }
 
-    const existing = (await this.addressService.checkAddressForUserOrder(
-      userId,
-    )) as Address[] | undefined;
-    if (!existing || existing.length === 0) {
-      await this.addressService.addAddress(userId, {
-        firstName: address.firstName,
-        lastName: address.lastName,
-        address: address.address,
-        addressInfo: address.addressInfo ?? "",
-        city: address.city,
-        zip: address.zip,
-        country: address.country,
-        isPrimary: address.isPrimary ?? false,
-      });
+    // Saving to the address book is a convenience; it must not fail the order update
+    try {
+      const existing = await this.addressService.checkAddressForUserOrder(userId);
+      if (existing.length === 0) {
+        await this.addressService.addAddress(userId, {
+          firstName: address.firstName,
+          lastName: address.lastName,
+          address: address.address,
+          addressInfo: address.addressInfo ?? "",
+          city: address.city,
+          zip: address.zip,
+          country: address.country,
+          isPrimary: address.isPrimary ?? false,
+        });
+      }
+    } catch (error) {
+      console.error(`Could not save address book entry for user ${userId}:`, error);
     }
   }
 
