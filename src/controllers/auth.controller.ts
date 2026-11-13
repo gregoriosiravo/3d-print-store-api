@@ -1,10 +1,19 @@
 import { Request, Response } from "express";
 import { AuthService } from "../services/auth.service";
 import { pool } from "../config/database";
+import { clearSessionCookie, setSessionCookie } from "../utils/session";
 
 const authService = new AuthService();
 
 export class AuthController {
+  /**
+   * End the browser session by clearing the session cookie
+   */
+  logout(req: Request, res: Response) {
+    clearSessionCookie(res);
+    res.json({ message: "Logged out" });
+  }
+
   /**
    * Register new user
    */
@@ -38,6 +47,7 @@ export class AuthController {
         lastName,
       });
 
+      setSessionCookie(res, result.token);
       res.status(201).json(result);
     } catch (error) {
       console.error("Registration error:", error);
@@ -129,6 +139,7 @@ export class AuthController {
 
       const result = await authService.login({ email, password });
 
+      setSessionCookie(res, result.token);
       res.json(result);
     } catch (error) {
       console.error("Login error:", error);

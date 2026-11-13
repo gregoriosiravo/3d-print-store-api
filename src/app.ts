@@ -17,6 +17,7 @@ const app: Application = express();
 app.use(
   cors({
     origin: process.env.FRONTEND_URL || "http://localhost:3000",
+    credentials: true, // the browser sends the session cookie
   }),
 );
 app.use("/api/webhooks", webhookRouter);
