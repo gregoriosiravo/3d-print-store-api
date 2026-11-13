@@ -32,4 +32,10 @@ router.post(
   authenticate,
   orderController.cancelUserOrder.bind(orderController),
 );
+router.post(
+  "/orders/:orderId/confirm-payment",
+  authenticate,
+  orderController.confirmUserPayment.bind(orderController),
+);
+
 export default router;

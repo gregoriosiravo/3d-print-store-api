@@ -72,7 +72,8 @@ A pending quote past `expires_at` becomes `expired`. This happens at startup and
 | POST | `/orders/accept-quote` | Bearer | `{ quoteId, shippingAddress? }`, where `shippingAddress` is the address shape below | 201 order (below) | 400 missing or malformed `quoteId`, or an address without the required fields; 403, 404, 409, 410 as for approve |
 | GET | `/orders` | Bearer | optional `?orderId=` | 200 array, or one order when `orderId` is given | 404 for `orderId` (not found, not owned, or malformed) |
 | POST | `/orders/:orderId/cancel` | Bearer | none | 200 `{ message }`. A paid order is refunded through Stripe in the same request | 404 order not found, not owned, or malformed ID; 409 already cancelled, shipped or completed, or a paid order with no payment on record; 400 Stripe refused the refund (for example the payment cannot be refunded) |
-| POST | `/orders/:orderId/pay` | Bearer | none | 200 `{ clientSecret }` | 404 order not found or not owned, 400 already paid, 500 Stripe failure |
+| POST | `/orders/:orderId/pay` | Bearer | none | 200 `{ clientSecret }`. Repeated calls return the same PaymentIntent (idempotency key), so one order cannot be charged twice | 404 order not found or not owned, 400 already paid, 500 Stripe failure |
+| POST | `/orders/:orderId/confirm-payment` | Bearer | none | 200 `{ paymentStatus: "paid" }` | 404; 409 no payment started, or Stripe has not reported success; 400 the payment's amount, currency or order does not match |
 | PATCH | `/orders/:orderId/address` | Bearer | address (below) | 200 `{ message }` | 400 invalid address, 404 order not found or not owned |
 
 Address shape (used by accept-quote and the address update):
@@ -110,7 +111,7 @@ Accept-quote and approve response:
 
 `totalAmount` is the price stored on the quote. The request cannot change it.
 
-`/orders/:orderId/pay` creates a Stripe PaymentIntent for `Math.round(total_amount * 100)` cents in EUR, with the order ID in its metadata and `allow_redirects: never`. The client confirms it with Stripe.js and the secret.
+`/orders/:orderId/pay` creates (or reuses) a Stripe PaymentIntent, and stores its ID on the order for `Math.round(total_amount * 100)` cents in EUR, with the order ID in its metadata and `allow_redirects: never`. The client confirms it with Stripe.js and the secret.
 
 ### Addresses (`/api/address/:userId`)
 
@@ -396,6 +397,9 @@ sequenceDiagram
     S-->>API: client_secret
     API-->>UI: 200 clientSecret
     UI->>S: confirmPayment via Stripe.js
+    UI->>API: POST /api/orders/:id/confirm-payment (Bearer)
+    API->>S: paymentIntents.retrieve, check status, amount, order
+    API->>DB: UPDATE orders SET payment_status paid, status processing
     S-->>API: POST /api/webhooks/stripe payment_intent.succeeded
     API->>API: verify Stripe-Signature on raw body
     API->>DB: UPDATE orders SET payment_status paid, status processing

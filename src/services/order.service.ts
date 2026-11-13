@@ -187,6 +187,67 @@ export class OrderService {
   }
 
   /**
+   * Create the Stripe PaymentIntent for an order and store its ID on the order.
+   * The idempotency key means a repeated click returns the same PaymentIntent instead of a second charge.
+   */
+  async startPayment(userId: string, orderId: string): Promise<string> {
+    const order = await this.getOrder(userId, orderId);
+    if (!order) {
+      throw new HttpError(404, "Order not found");
+    }
+    if (order.payment_status === "paid") {
+      throw new HttpError(400, "Order is already paid");
+    }
+
+    const intent = await stripe.paymentIntents.create(
+      {
+        amount: Math.round(Number(order.total_amount) * 100),
+        currency: "eur",
+        metadata: { orderId },
+        automatic_payment_methods: { enabled: true, allow_redirects: "never" },
+      },
+      { idempotencyKey: `pay-${orderId}` },
+    );
+
+    await pool.query(
+      `UPDATE orders SET payment_id = $1, updated_at = CURRENT_TIMESTAMP
+       WHERE id = $2 AND payment_status <> 'paid'`,
+      [intent.id, orderId],
+    );
+    return intent.client_secret as string;
+  }
+
+  /**
+   * Check the payment with Stripe directly and mark the order paid. This does not depend on
+   * the webhook, which cannot reach a local development API. The amount, currency and order
+   * ID must all match before the order is marked paid.
+   */
+  async confirmPayment(userId: string, orderId: string): Promise<void> {
+    const order = await this.getOrder(userId, orderId);
+    if (!order) {
+      throw new HttpError(404, "Order not found");
+    }
+    if (order.payment_status === "paid") return;
+    if (!order.payment_id) {
+      throw new HttpError(409, "No payment has been started for this order");
+    }
+
+    const intent = await stripe.paymentIntents.retrieve(order.payment_id);
+    if (intent.status !== "succeeded") {
+      throw new HttpError(409, "The payment has not completed");
+    }
+    if (
+      intent.metadata.orderId !== orderId ||
+      intent.amount !== Math.round(Number(order.total_amount) * 100) ||
+      intent.currency !== "eur"
+    ) {
+      throw new HttpError(400, "The payment does not match this order");
+    }
+
+    await this.updatePaymentStatus(orderId, "paid", "stripe", intent.id);
+  }
+
+  /**
    * Cancel an order the user owns. A paid order is refunded through Stripe first.
    * The row is locked so a double click cannot refund twice.
    */
@@ -260,8 +321,8 @@ export class OrderService {
   ): Promise<void> {
     await pool.query(
       `UPDATE orders
-       SET payment_status = $1,
-           status = CASE WHEN $1 = 'paid' THEN 'processing' ELSE status END,
+       SET payment_status = $1::varchar,
+           status = CASE WHEN $1::varchar = 'paid' THEN 'processing' ELSE status END,
            payment_id = $2,
            payment_method = $3,
            updated_at = CURRENT_TIMESTAMP

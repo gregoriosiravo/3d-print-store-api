@@ -203,6 +203,36 @@ describe("orders", () => {
     assert.equal((await call("POST", `/orders/${order.orderId}/cancel`, { token: alice.token })).status, 409);
   });
 
+  it("starting payment twice returns the same PaymentIntent, not a second charge", async () => {
+    const quote = await ownQuote();
+    const order = (await call("POST", `/quote/${quote.quoteId}/approve`, { token: alice.token })).body;
+    const first = await call("POST", `/orders/${order.orderId}/pay`, { token: alice.token });
+    const second = await call("POST", `/orders/${order.orderId}/pay`, { token: alice.token });
+    assert.equal(first.status, 200);
+    assert.equal(first.body.clientSecret, second.body.clientSecret);
+    const { rows } = await db.query("SELECT payment_id FROM orders WHERE id = $1", [order.orderId]);
+    assert.ok(rows[0].payment_id?.startsWith("pi_"));
+  });
+
+  it("confirming a payment that has not succeeded is refused, and a succeeded one marks the order paid", async () => {
+    const quote = await ownQuote();
+    const order = (await call("POST", `/quote/${quote.quoteId}/approve`, { token: alice.token })).body;
+    assert.equal((await call("POST", `/orders/${order.orderId}/confirm-payment`, { token: alice.token })).status, 409);
+
+    await call("POST", `/orders/${order.orderId}/pay`, { token: alice.token });
+    const { rows } = await db.query("SELECT payment_id FROM orders WHERE id = $1", [order.orderId]);
+    await stripe.paymentIntents.confirm(rows[0].payment_id, {
+      payment_method: "pm_card_visa",
+      return_url: "http://localhost:3000/checkout",
+    });
+
+    const confirmed = await call("POST", `/orders/${order.orderId}/confirm-payment`, { token: alice.token });
+    assert.equal(confirmed.status, 200, JSON.stringify(confirmed.body));
+    const row = await db.query("SELECT status, payment_status FROM orders WHERE id = $1", [order.orderId]);
+    assert.deepEqual(row.rows[0], { status: "processing", payment_status: "paid" });
+    assert.equal((await call("POST", `/orders/${order.orderId}/confirm-payment`, { token: alice.token })).status, 200);
+  });
+
   it("order routes return 404 for malformed IDs and for other users' orders", async () => {
     assert.equal((await call("GET", "/orders?orderId=abc", { token: alice.token })).status, 404);
     assert.equal((await call("POST", "/orders/abc/cancel", { token: alice.token })).status, 404);

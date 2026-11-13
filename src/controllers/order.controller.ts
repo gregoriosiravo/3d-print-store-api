@@ -82,30 +82,13 @@ export class OrderController {
     if (!req.user) {
       return res.status(401).json({ error: "Not authenticated" });
     }
+    const { orderId } = req.params as { orderId: string };
+    if (!isUuid(orderId)) {
+      return res.status(404).json({ error: "Order not found" });
+    }
     try {
-      const { orderId } = req.params as { orderId: string };
-      const order = isUuid(orderId)
-        ? await orderService.getOrder(req.user.userId, orderId)
-        : null;
-
-      if (!order) {
-        return res.status(404).json({ error: "Order not found" });
-      }
-      if (order.payment_status === "paid") {
-        return res.status(400).json({ error: "Order is already paid" });
-      }
-
-      const paymentIntent = await stripe.paymentIntents.create({
-        amount: Math.round(Number(order.total_amount) * 100),
-        currency: "eur",
-        metadata: { orderId },
-        automatic_payment_methods: {
-          enabled: true,
-          allow_redirects: "never",
-        },
-      });
-
-      res.json({ clientSecret: paymentIntent.client_secret });
+      const clientSecret = await orderService.startPayment(req.user.userId, orderId);
+      res.json({ clientSecret });
     } catch (error) {
       sendError(res, error, "Failed to create payment intent");
     }
@@ -124,6 +107,23 @@ export class OrderController {
       res.json({ message: "Order cancelled" });
     } catch (error) {
       sendError(res, error, "Failed to cancel order");
+    }
+  }
+
+  // Called by the checkout page after Stripe reports success
+  async confirmUserPayment(req: Request, res: Response) {
+    if (!req.user) {
+      return res.status(401).json({ error: "Not authenticated" });
+    }
+    const { orderId } = req.params as { orderId: string };
+    if (!isUuid(orderId)) {
+      return res.status(404).json({ error: "Order not found" });
+    }
+    try {
+      await orderService.confirmPayment(req.user.userId, orderId);
+      res.json({ paymentStatus: "paid" });
+    } catch (error) {
+      sendError(res, error, "Failed to confirm payment");
     }
   }
 
