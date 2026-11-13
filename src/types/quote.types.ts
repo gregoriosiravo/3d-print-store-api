@@ -10,9 +10,17 @@ export interface STLAnalysis {
   };
 }
 
+export interface PrintConfigRow {
+  id: number;
+  name: string;
+  layer_height: string;
+  infill_percentage: number;
+  time_multiplier: string;
+}
+
 export interface PricingRequest {
   materialId: number;
-  printConfigId: number;
+  config: PrintConfigRow;
   stlAnalysis: STLAnalysis;
 }
 

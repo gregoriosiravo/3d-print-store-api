@@ -1,7 +1,45 @@
 import { pool } from "../config/database";
-import { PricingRequest, PricingBreakdown } from "../types/quote.types";
+import {
+  PricingRequest,
+  PricingBreakdown,
+  PrintConfigRow,
+} from "../types/quote.types";
+
+// Print time scales with layer height; these match the seeded presets
+export const TIME_MULTIPLIER_BY_LAYER_HEIGHT: Record<number, number> = {
+  0.1: 1.5,
+  0.2: 1.0,
+  0.3: 0.8,
+};
 
 export class PricingService {
+  /**
+   * Find the print_configs row for a layer height and infill, creating it if missing.
+   * Quotes keep a reference to this row, so each combination is stored once.
+   */
+  async getOrCreateConfig(
+    layerHeight: number,
+    infillPercentage: number,
+  ): Promise<PrintConfigRow> {
+    const existing = await pool.query(
+      "SELECT * FROM print_configs WHERE layer_height = $1 AND infill_percentage = $2 LIMIT 1",
+      [layerHeight, infillPercentage],
+    );
+    if (existing.rows.length > 0) return existing.rows[0];
+
+    const created = await pool.query(
+      `INSERT INTO print_configs (name, layer_height, infill_percentage, time_multiplier)
+       VALUES ($1, $2, $3, $4) RETURNING *`,
+      [
+        `${layerHeight}mm / ${infillPercentage}%`,
+        layerHeight,
+        infillPercentage,
+        TIME_MULTIPLIER_BY_LAYER_HEIGHT[layerHeight],
+      ],
+    );
+    return created.rows[0];
+  }
+
   /**
    * Calculate price based on STL analysis and selected options
    */
@@ -15,17 +53,8 @@ export class PricingService {
       throw new Error("Material not found");
     }
 
-    const configResult = await pool.query(
-      "SELECT * FROM print_configs WHERE id = $1",
-      [request.printConfigId],
-    );
-
-    if (configResult.rows.length === 0) {
-      throw new Error("Print configuration not found");
-    }
-
     const material = materialResult.rows[0];
-    const config = configResult.rows[0];
+    const config = request.config;
 
     const volumeCm3 = request.stlAnalysis.volumeCm3;
     const surfaceAreaCm2 = request.stlAnalysis.surfaceAreaCm2;

@@ -1,6 +1,9 @@
 import { Request, Response } from "express";
 import { StlParserService } from "../services/stl-parser.service";
-import { PricingService } from "../services/pricing.service";
+import {
+  PricingService,
+  TIME_MULTIPLIER_BY_LAYER_HEIGHT,
+} from "../services/pricing.service";
 import { pool } from "../config/database";
 import { v4 as uuidv4 } from "uuid";
 import { OrderService } from "../services/order.service";
@@ -18,11 +21,22 @@ export class QuoteController {
         return res.status(400).json({ error: "No STL file uploaded" });
       }
 
-      const { materialId, printConfigId } = req.body;
+      const { materialId, layerHeight, infillDensity } = req.body;
 
-      if (!materialId || !printConfigId) {
+      if (!materialId || !layerHeight || !infillDensity) {
         return res.status(400).json({
-          error: "materialId and printConfigId are required",
+          error: "materialId, layerHeight and infillDensity are required",
+        });
+      }
+
+      const layerHeightMm = parseFloat(layerHeight);
+      const infillPercentage = parseInt(infillDensity);
+      if (
+        !(layerHeightMm in TIME_MULTIPLIER_BY_LAYER_HEIGHT) ||
+        !(infillPercentage >= 1 && infillPercentage <= 100)
+      ) {
+        return res.status(400).json({
+          error: "Unsupported layerHeight or infillDensity",
         });
       }
 
@@ -33,9 +47,13 @@ export class QuoteController {
       );
 
       // Calculate pricing
+      const config = await pricingService.getOrCreateConfig(
+        layerHeightMm,
+        infillPercentage,
+      );
       const pricing = await pricingService.calculatePrice({
         materialId: parseInt(materialId),
-        printConfigId: parseInt(printConfigId),
+        config,
         stlAnalysis,
       });
 
@@ -66,7 +84,7 @@ export class QuoteController {
           stlAnalysis.boundingBox.y,
           stlAnalysis.boundingBox.z,
           materialId,
-          printConfigId,
+          config.id,
           pricing.materialCost,
           pricing.machineCost,
           pricing.laborCost,
