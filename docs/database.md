@@ -107,7 +107,7 @@ erDiagram
         uuid quote_id FK
         varchar order_number UK
         numeric total_amount
-        varchar status "pending, processing, printing, completed, shipped, cancelled"
+        varchar status "pending, processing, printing, shipped, received, cancelled"
         varchar shipping_name
         text shipping_address
         varchar shipping_city

@@ -292,7 +292,7 @@ export class OrderService {
       if (!order) {
         throw new HttpError(404, "Order not found");
       }
-      if (["cancelled", "shipped", "completed"].includes(order.status)) {
+      if (["cancelled", "shipped", "received"].includes(order.status)) {
         throw new HttpError(409, "Order can no longer be cancelled");
       }
 
@@ -325,8 +325,8 @@ export class OrderService {
   }
 
   /**
-   * Ask for a refund of a paid order. The customer cannot refund directly once paid
-   * (cancelling a paid order is refused), so the request is recorded for review.
+   * Ask for a refund of a paid order that has been received. Cancelling is only possible
+   * before shipping, so after delivery the request is recorded for review.
    */
   async requestRefund(userId: string, orderId: string): Promise<void> {
     const order = await this.getOrder(userId, orderId);
@@ -336,8 +336,8 @@ export class OrderService {
     if (order.payment_status !== "paid") {
       throw new HttpError(409, "Only a paid order can be refunded");
     }
-    if (["cancelled", "shipped", "completed"].includes(order.status)) {
-      throw new HttpError(409, "This order can no longer be refunded");
+    if (order.status !== "received") {
+      throw new HttpError(409, "A refund can be requested once the order is received");
     }
     await pool.query(
       `UPDATE orders SET payment_status = 'refund_requested', updated_at = CURRENT_TIMESTAMP

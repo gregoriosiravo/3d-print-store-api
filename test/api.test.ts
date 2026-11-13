@@ -262,12 +262,15 @@ describe("orders", () => {
     assert.equal((await call("POST", `/orders/${order.orderId}/confirm-payment`, { token: alice.token })).status, 200);
   });
 
-  it("a paid order can request one refund; unpaid orders cannot", async () => {
+  it("a refund can be requested once, only for a paid order that is received", async () => {
     const quote = await ownQuote();
     const order = (await call("POST", `/quote/${quote.quoteId}/approve`, { token: alice.token })).body;
     assert.equal((await call("POST", `/orders/${order.orderId}/refund-request`, { token: alice.token })).status, 409);
 
-    await db.query("UPDATE orders SET payment_status = 'paid' WHERE id = $1", [order.orderId]);
+    await db.query("UPDATE orders SET payment_status = 'paid', status = 'processing' WHERE id = $1", [order.orderId]);
+    assert.equal((await call("POST", `/orders/${order.orderId}/refund-request`, { token: alice.token })).status, 409);
+
+    await db.query("UPDATE orders SET status = 'received' WHERE id = $1", [order.orderId]);
     const requested = await call("POST", `/orders/${order.orderId}/refund-request`, { token: alice.token });
     assert.equal(requested.status, 200);
     const row = await db.query("SELECT payment_status FROM orders WHERE id = $1", [order.orderId]);

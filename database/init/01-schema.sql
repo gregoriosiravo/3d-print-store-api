@@ -86,7 +86,7 @@ CREATE TABLE orders (
     -- Order details
     order_number VARCHAR(50) UNIQUE NOT NULL,
     total_amount DECIMAL(10, 2) NOT NULL,
-    status VARCHAR(50) DEFAULT 'pending', -- pending, processing, printing, completed, shipped, cancelled
+    status VARCHAR(50) DEFAULT 'pending', -- pending, processing, printing, shipped, received, cancelled
 
     -- Shipping info
     shipping_name VARCHAR(200),
