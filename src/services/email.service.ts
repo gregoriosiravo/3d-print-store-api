@@ -158,7 +158,7 @@ export class EmailService {
             <h2>Order Confirmation</h2>
             <h3>Thank you for your order!</h3>
             <p><strong>Order Number:</strong> ${orderNumber}</p>
-            <p><strong>Total Amount:</strong> $${totalAmount.toFixed(2)}</p>
+            <p><strong>Total Amount:</strong> $${Number(totalAmount).toFixed(2)}</p>
             <p>You can track your order status in your account.</p>
             <p>Thank you for choosing 3D Print Shop!</p>
           </div>
