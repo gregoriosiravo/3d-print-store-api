@@ -222,4 +222,4 @@ Migrations 3 to 6 are already included in `01-schema.sql`, and they are not idem
 
 **Verification performed:** a fresh Postgres 16 container built from `database/init/` was compared with the live database: all columns (including types, nullability, lengths and precision), all indexes, and all foreign keys matched. Row counts differ only where data was added (the live database has five extra print configs from quote requests).
 
-The Prisma model in `prisma/schema.prisma` mirrors the same tables, including `users.stripe_customer_id`. Nothing at runtime uses the Prisma client, so the SQL in `database/` is the source of truth. Make schema changes in SQL first, then mirror them in `prisma/schema.prisma`.
+Prisma was removed: nothing used its client at runtime, and its packages carried known vulnerabilities. The SQL files in `database/` are the schema source of truth, and schema changes go there as a new migration.

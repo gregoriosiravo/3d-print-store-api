@@ -12,7 +12,7 @@ Express 5 + TypeScript REST API for the PrintFlow 3D store. It parses uploaded S
 | HTTP | Express 5, `cors`, `express.json` |
 | Uploads | Multer (disk storage in `uploads/stl-files`, STL only, 50 MB limit) |
 | STL parsing | `node-stl` (volume, surface area, bounding box) |
-| Database | PostgreSQL 16 through the `pg` pool (`src/config/database.ts`) with SQL. Nothing imports the Prisma client at runtime |
+| Database | PostgreSQL 16 through the `pg` pool (`src/config/database.ts`) with SQL. The SQL files in `database/` are the schema source of truth |
 | Auth | bcrypt (10 rounds), JWT (`jsonwebtoken`, 7 days by default). Browsers get an HttpOnly, SameSite=Strict session cookie; API clients can send `Authorization: Bearer` |
 | Payments | Stripe: PaymentIntents for orders (EUR), SetupIntents and saved cards for payment methods, webhook for `payment_intent.succeeded` |
 | Email | Nodemailer over SMTP (verification, welcome, order confirmation) |
@@ -28,14 +28,12 @@ src/
   controllers/           # HTTP layer: validate input, map errors to status codes
   services/              # business logic and SQL; quote-cleanup.service expires quotes and removes uploads
   utils/                 # HttpError, isUuid, address field check, session cookie helpers
-  config/                # pg pool, Stripe client, Prisma client (prisma.ts is not imported)
+  config/                # pg pool, Stripe client
   types/                 # request/response interfaces
-  generated/prisma/      # Prisma client (generated, do not edit)
 database/
   init/01-schema.sql     # full schema for a new Docker volume
   init/02-seed.sql       # materials and print configs
   migration/*.sql        # incremental changes, applied in order (see database.md)
-prisma/schema.prisma     # Prisma model of the database (kept in step with the SQL)
 test/                    # node:test suite: unit tests and HTTP tests against a running API
 ```
 
@@ -49,7 +47,7 @@ From the repository root (Docker, recommended):
 docker compose up --build
 ```
 
-The `api` service runs `prisma generate` and then `npm run dev` (nodemon + ts-node) with the source mounted, so edits reload. Inside the compose network the database host is `postgres`, which is why `docker-compose.yml` overrides `DATABASE_URL` and `DB_HOST`.
+The `api` service runs `npm run dev` (nodemon + ts-node) with the source mounted, so edits reload. Inside the compose network the database host is `postgres`, which is why `docker-compose.yml` overrides `DB_HOST`.
 
 A new Docker volume gets the full schema from `database/init/`, so no manual migration is needed. An existing database created before this revision needs migration `07-add-users-stripe-customer-id.sql` (see [database.md](database.md#migrations)).
 
@@ -76,10 +74,10 @@ The HTTP tests tag every user and quote they create with a run stamp (`probe-<st
 | Variable | Used by | Purpose |
 |---|---|---|
 | `PORT` | server | HTTP port, default 4000 |
-| `NODE_ENV` | Prisma client caching | `development` or `production` |
+| `NODE_ENV` | session cookie | `production` sets the cookie `Secure` flag |
+| `TRUST_PROXY` | rate limiting | Hop count (for example `1` behind one reverse proxy) so the upload limit sees client addresses. Unset means the connection address is used |
 | `FRONTEND_URL` | CORS, email links | Allowed origin, default `http://localhost:3000` |
 | `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD` | `pg` pool | Database connection for the SQL code |
-| `DATABASE_URL` | Prisma CLI (`prisma.config.ts`) | Connection string for the Prisma CLI |
 | `JWT_SECRET` | auth | Signs and verifies tokens (required) |
 | `JWT_EXPIRES_IN` | auth | Token lifetime, default `7d` |
 | `BASE_MACHINE_COST_PER_HOUR` | pricing | Machine rate, default 5.00 |
@@ -112,16 +110,18 @@ Each item was checked against the running API (HTTP requests or the test suite).
 | Addresses | Address writes now throw on failure. Setting a primary address clears the others in the same transaction. Missing or malformed IDs return 404, and bad bodies return 400 | `services/address.service.ts`, `controllers/address.controller.ts` |
 | Quotes | Pending quotes past `expires_at` are marked `expired` at startup and then hourly, and their uploads are removed. The quote list shows an overdue pending quote as expired at once. Rejecting a quote removes its upload. A failed parse removes the upload it came from | `services/quote-cleanup.service.ts`, `server.ts`, `controllers/quote.controller.ts` |
 | Uploads | `POST /api/quote` is rate limited per IP (`express-rate-limit`) | `routes/quote.route.ts` |
-| Schema | The Prisma model has `users.stripe_customer_id` | `prisma/schema.prisma` |
-| Dependencies | Non-breaking audit fixes applied. Four high findings remain (see open issues) | `package-lock.json` |
-| Tests | 32 HTTP and unit tests with stamp-based cleanup | `test/` |
+| Prisma | Removed. Nothing used it at runtime, and it carried the vulnerable packages. The SQL in `database/` is the schema | `package.json`, `Dockerfile` |
+| Vulnerabilities | `npm audit` reports zero findings for runtime and development packages. `nodemailer` is 10.x | `package-lock.json` |
+| Email | Mail to RFC 2606 reserved domains (`example.com` and similar) is logged and not sent, so test users do not use the SMTP quota | `services/email.service.ts` |
+| Refunds | Cancelling a paid order refunds it through Stripe (idempotent, row locked) and marks the order `refunded` | `services/order.service.ts` `cancelOrder` |
+| Catalogue | `GET /api/materials` and `GET /api/print-presets` are public reference data for the Materials and Services pages | `routes/catalog.route.ts` |
+| Proxy | `TRUST_PROXY` configures the client address used by the rate limit | `app.ts` |
+| Tests | 35 unit and HTTP tests. HTTP tests tag every row with a run stamp and clean up by it | `test/` |
 
 ## Open issues
 
 These are real gaps that were not changed.
 
-1. **Four high-severity audit findings remain.** `npm audit --omit=dev` reports `nodemailer` (fix needs 10.x) and `prisma` with `@prisma/config` and `deepmerge-ts` (fix needs Prisma 7). Both fixes are major-version upgrades with possible breaking changes, so they need a decision.
-2. **The test suite sends real email.** Each run registers users, and registration sends a verification email through the configured SMTP account. The addresses are `example.com`, so they do not deliver, but they count against the account.
-3. **Rate limiting uses the connection address.** Behind a reverse proxy every client shares one address until `trust proxy` is configured.
-4. **Paid orders cannot be cancelled or refunded.** There is no refund path. The profile page offers Cancel on every order that is not accepted; for a paid order the API answers 409 and the page shows an alert. A customer who has paid has no self-service way out.
-5. **Quote expiry happened once on existing data.** When the expiry job first ran against the live database it marked six overdue quotes from February to July as expired and deleted their upload files. The quotes could not be ordered anyway, but the files are gone and cannot be restored.
+1. **Quote expiry removed data once.** When the expiry job first ran against the live database it marked six overdue quotes (February to July) as expired and deleted their upload files. Those quotes could not be ordered anyway, and the files cannot be restored. This is a record, not a current risk.
+2. **Refunds depend on Stripe state.** A paid order is refunded only when its payment intent is still refundable in Stripe. Otherwise the cancel returns 400 with Stripe's message and nothing changes.
+3. **Test runs create Stripe test-mode objects.** The API and end-to-end tests create customers, payment intents and refunds in the Stripe test account. They are harmless but accumulate.

@@ -71,7 +71,7 @@ A pending quote past `expires_at` becomes `expired`. This happens at startup and
 |---|---|---|---|---|---|
 | POST | `/orders/accept-quote` | Bearer | `{ quoteId, shippingAddress? }`, where `shippingAddress` is the address shape below | 201 order (below) | 400 missing or malformed `quoteId`, or an address without the required fields; 403, 404, 409, 410 as for approve |
 | GET | `/orders` | Bearer | optional `?orderId=` | 200 array, or one order when `orderId` is given | 404 for `orderId` (not found, not owned, or malformed) |
-| POST | `/orders/:orderId/cancel` | Bearer | none | 200 `{ message }` | 404 order not found, not owned, or malformed ID; 409 already paid, cancelled, shipped or completed |
+| POST | `/orders/:orderId/cancel` | Bearer | none | 200 `{ message }`. A paid order is refunded through Stripe in the same request | 404 order not found, not owned, or malformed ID; 409 already cancelled, shipped or completed, or a paid order with no payment on record; 400 Stripe refused the refund (for example the payment cannot be refunded) |
 | POST | `/orders/:orderId/pay` | Bearer | none | 200 `{ clientSecret }` | 404 order not found or not owned, 400 already paid, 500 Stripe failure |
 | PATCH | `/orders/:orderId/address` | Bearer | address (below) | 200 `{ message }` | 400 invalid address, 404 order not found or not owned |
 
@@ -158,6 +158,17 @@ Card object returned by the list:
 
 Lists are sorted with the default card first. At most one card per user is the default. Setting a new default clears the old one in the same transaction and updates the Stripe customer's default. Deleting a card detaches it from the Stripe customer first. If Stripe reports the card as missing (`resource_missing`), the local row is still removed.
 
+### Catalogue (public)
+
+Reference data for the Materials and Services pages. No authentication.
+
+| Method | Path | Success |
+|---|---|---|
+| GET | `/materials` | 200 array of `{ id, name, type, color }`, available materials only |
+| GET | `/print-presets` | 200 array of `{ id, name, layerHeight, infillPercentage, supportEnabled, printSpeed }` |
+
+The print presets are the named presets. Combinations created for quotes are named like `0.1mm / 15%` and are not listed.
+
 ### Stripe webhook
 
 | Method | Path | Auth | Behaviour |
@@ -225,6 +236,10 @@ classDiagram
     class webhookController {
         +handleStripeWebhook()
     }
+    class CatalogController {
+        +materials()
+        +printPresets()
+    }
     class StlParserService {
         +analyzeStlFile()
     }
@@ -286,6 +301,7 @@ classDiagram
     App --> AddressController : /api address
     App --> PaymentMethodsController : /api payment-methods
     App --> webhookController : /api/webhooks
+    App --> CatalogController : /api materials and print presets
     QuoteController ..> authenticate : protected
     QuoteController ..> optionalAuth : create and read
     OrderController ..> authenticate
