@@ -187,8 +187,10 @@ export class OrderService {
   }
 
   /**
-   * Create the Stripe PaymentIntent for an order and store its ID on the order.
-   * The idempotency key means a repeated click returns the same PaymentIntent instead of a second charge.
+   * Return the PaymentIntent to pay with. Stripe is asked about the PaymentIntent the order
+   * already has first: if it has succeeded, the order is marked paid and refused; if it is still
+   * open for the same amount, its client secret is reused; only a cancelled or different one is
+   * replaced. This stops a second charge even when the webhook has not updated the order.
    */
   async startPayment(userId: string, orderId: string): Promise<string> {
     const order = await this.getOrder(userId, orderId);
@@ -198,15 +200,28 @@ export class OrderService {
     if (order.payment_status === "paid") {
       throw new HttpError(400, "Order is already paid");
     }
+    const amount = Math.round(Number(order.total_amount) * 100);
 
+    if (order.payment_id) {
+      const current = await stripe.paymentIntents.retrieve(order.payment_id);
+      if (current.status === "succeeded") {
+        await this.confirmPayment(userId, orderId);
+        throw new HttpError(400, "Order is already paid");
+      }
+      if (current.status !== "canceled" && current.amount === amount && current.client_secret) {
+        return current.client_secret;
+      }
+    }
+
+    // Keyed on the previous PaymentIntent, so a retry after a cancellation is a new payment
     const intent = await stripe.paymentIntents.create(
       {
-        amount: Math.round(Number(order.total_amount) * 100),
+        amount,
         currency: "eur",
         metadata: { orderId },
         automatic_payment_methods: { enabled: true, allow_redirects: "never" },
       },
-      { idempotencyKey: `pay-${orderId}` },
+      { idempotencyKey: `pay-${orderId}-${order.payment_id ?? "first"}` },
     );
 
     await pool.query(

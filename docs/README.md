@@ -114,6 +114,7 @@ Each item was checked against the running API (HTTP requests or the test suite).
 | Vulnerabilities | `npm audit` reports zero findings for runtime and development packages. `nodemailer` is 10.x | `package-lock.json` |
 | Email | Mail to RFC 2606 reserved domains (`example.com` and similar) is logged and not sent, so test users do not use the SMTP quota | `services/email.service.ts` |
 | Payments | Paid status no longer depends only on the webhook: `POST /api/orders/:id/confirm-payment` asks Stripe and checks amount and order. Repeated pay calls reuse one PaymentIntent. The webhook's SQL failed on a parameter type, which is fixed | `services/order.service.ts`, `controllers/order.controller.ts` |
+| Double payment | An order whose payment had succeeded but was still pending could be charged again. Starting payment now checks the order's PaymentIntent with Stripe, marks the order paid if it succeeded, and refuses a second charge | `services/order.service.ts` `startPayment` |
 | Emails | Order confirmation formats the numeric total correctly (Postgres returns numerics as strings) | `services/email.service.ts` |
 | Refunds | Cancelling a paid order refunds it through Stripe (idempotent, row locked) and marks the order `refunded` | `services/order.service.ts` `cancelOrder` |
 | Catalogue | `GET /api/materials` and `GET /api/print-presets` are public reference data for the Materials and Services pages | `routes/catalog.route.ts` |

@@ -214,6 +214,35 @@ describe("orders", () => {
     assert.ok(rows[0].payment_id?.startsWith("pi_"));
   });
 
+  it("a payment that already succeeded in Stripe marks the order paid and cannot be paid again", async () => {
+    const quote = await ownQuote();
+    const order = (await call("POST", `/quote/${quote.quoteId}/approve`, { token: alice.token })).body;
+    await call("POST", `/orders/${order.orderId}/pay`, { token: alice.token });
+    const { rows } = await db.query("SELECT payment_id FROM orders WHERE id = $1", [order.orderId]);
+    // The webhook did not arrive, so the order is still pending while Stripe has the money
+    await stripe.paymentIntents.confirm(rows[0].payment_id, { payment_method: "pm_card_visa", return_url: "http://localhost:3000/checkout" });
+
+    const again = await call("POST", `/orders/${order.orderId}/pay`, { token: alice.token });
+    assert.equal(again.status, 400);
+    assert.equal(again.body.error, "Order is already paid");
+    const row = await db.query("SELECT payment_status FROM orders WHERE id = $1", [order.orderId]);
+    assert.equal(row.rows[0].payment_status, "paid");
+    assert.equal((await call("POST", `/orders/${order.orderId}/pay`, { token: alice.token })).status, 400);
+  });
+
+  it("after a payment is cancelled, starting payment again creates a new PaymentIntent", async () => {
+    const quote = await ownQuote();
+    const order = (await call("POST", `/quote/${quote.quoteId}/approve`, { token: alice.token })).body;
+    const first = await call("POST", `/orders/${order.orderId}/pay`, { token: alice.token });
+    const { rows } = await db.query("SELECT payment_id FROM orders WHERE id = $1", [order.orderId]);
+    await stripe.paymentIntents.cancel(rows[0].payment_id);
+    const retry = await call("POST", `/orders/${order.orderId}/pay`, { token: alice.token });
+    assert.equal(retry.status, 200);
+    assert.notEqual(retry.body.clientSecret, first.body.clientSecret);
+    const after = await db.query("SELECT payment_id FROM orders WHERE id = $1", [order.orderId]);
+    assert.notEqual(after.rows[0].payment_id, rows[0].payment_id);
+  });
+
   it("confirming a payment that has not succeeded is refused, and a succeeded one marks the order paid", async () => {
     const quote = await ownQuote();
     const order = (await call("POST", `/quote/${quote.quoteId}/approve`, { token: alice.token })).body;
