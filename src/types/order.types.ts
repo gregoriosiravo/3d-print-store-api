@@ -1,16 +1,18 @@
 export interface AcceptQuoteRequest {
   quoteId: string;
-  shippingAddress: ShippingAddress;
+  shippingAddress?: ShippingAddress | null;
 }
 
+// Same field names as the address book and the checkout form
 export interface ShippingAddress {
-  name: string;
+  firstName: string;
+  lastName: string;
   address: string;
+  addressInfo?: string;
   city: string;
-  postalCode: string;
+  zip: string;
   country: string;
-  phone?: string;
-  email?: string;
+  isPrimary?: boolean;
 }
 
 export interface OrderResponse {

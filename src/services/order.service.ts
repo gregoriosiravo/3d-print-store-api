@@ -1,18 +1,26 @@
 import { pool } from "../config/database";
-import { AcceptQuoteRequest, OrderResponse } from "../types/order.types";
+import {
+  AcceptQuoteRequest,
+  OrderResponse,
+  ShippingAddress,
+} from "../types/order.types";
+import { Address } from "../types/address.types";
 import { EmailService } from "./email.service";
 import { AddressService } from "./address.service";
-import { Address } from "../types/address.types";
+import { HttpError } from "../utils/http-error";
 
 export class OrderService {
   private emailService: EmailService;
+  private addressService: AddressService;
 
   constructor() {
     this.emailService = new EmailService();
+    this.addressService = new AddressService();
   }
 
   /**
-   * Accept quote and create order
+   * Turn a pending quote into an order. Shipping is optional here;
+   * the checkout page sets it later with updateShippingAddress.
    */
   async acceptQuote(
     userId: string,
@@ -23,27 +31,28 @@ export class OrderService {
     try {
       await client.query("BEGIN");
 
+      // Lock the quote row so two concurrent accepts cannot both pass the status check
       const quoteResult = await client.query(
-        `SELECT * FROM quotes WHERE id = $1`,
+        `SELECT * FROM quotes WHERE id = $1 FOR UPDATE`,
         [data.quoteId],
       );
 
       if (quoteResult.rows.length === 0) {
-        throw new Error("Quote not found");
+        throw new HttpError(404, "Quote not found");
       }
 
       const quote = quoteResult.rows[0];
 
-      if (new Date() > new Date(quote.expires_at)) {
-        throw new Error("Quote has expired");
-      }
-
-      if (quote.status === "ordered") {
-        throw new Error("Quote has already been used for an order");
-      }
-
       if (quote.user_id && quote.user_id !== userId) {
-        throw new Error("Unauthorized to accept this quote");
+        throw new HttpError(403, "Unauthorized to accept this quote");
+      }
+
+      if (quote.status !== "pending") {
+        throw new HttpError(409, "Quote has already been used for an order");
+      }
+
+      if (new Date() > new Date(quote.expires_at)) {
+        throw new HttpError(410, "Quote has expired");
       }
 
       const date = new Date();
@@ -51,6 +60,7 @@ export class OrderService {
       const randomNum = Math.floor(1000 + Math.random() * 9000);
       const orderNumber = `ORD-${dateStr}-${randomNum}`;
 
+      const shipping = data.shippingAddress;
       const orderResult = await client.query(
         `INSERT INTO orders (
           user_id, quote_id, order_number, total_amount, status, payment_status,
@@ -64,19 +74,19 @@ export class OrderService {
           quote.total_price,
           "pending",
           "pending",
-          data.shippingAddress.name,
-          data.shippingAddress.address,
-          data.shippingAddress.city,
-          data.shippingAddress.postalCode,
-          data.shippingAddress.country,
+          shipping ? `${shipping.firstName} ${shipping.lastName}` : null,
+          shipping ? this.formatStreet(shipping) : null,
+          shipping?.city ?? null,
+          shipping?.zip ?? null,
+          shipping?.country ?? null,
         ],
       );
 
       const order = orderResult.rows[0];
 
       await client.query(
-        `UPDATE quotes 
-         SET status = $1, user_id = COALESCE(user_id, $2)
+        `UPDATE quotes
+         SET status = $1, user_id = COALESCE(user_id, $2), updated_at = CURRENT_TIMESTAMP
          WHERE id = $3`,
         ["accepted", userId, data.quoteId],
       );
@@ -122,11 +132,11 @@ export class OrderService {
   }
 
   /**
-   * Get order by ID
+   * Get one order of a user, or null when it does not exist or belongs to someone else
    */
-  async getOrder(userId: string, orderId: string): Promise<any> {
+  async getOrder(userId: string, orderId: string): Promise<any | null> {
     const result = await pool.query(
-      `SELECT 
+      `SELECT
         o.*,
         q.stl_filename,
         q.volume_cm3,
@@ -147,11 +157,7 @@ export class OrderService {
       [orderId, userId],
     );
 
-    if (result.rows.length === 0) {
-      throw new Error("Order not found");
-    }
-
-    return result.rows[0];
+    return result.rows[0] ?? null;
   }
 
   /**
@@ -159,7 +165,7 @@ export class OrderService {
    */
   async getUserOrders(userId: string): Promise<any[]> {
     const result = await pool.query(
-      `SELECT 
+      `SELECT
         o.id,
         o.order_number,
         o.total_amount,
@@ -192,8 +198,8 @@ export class OrderService {
   }
 
   /**
-   * Update payment status
-   * paymentMethod is optional and can be used to store info about the payment method used (e.g. "stripe", "paypal", etc.)
+   * Record the payment result. A paid order moves to "processing";
+   * the order status is not touched otherwise.
    */
   async updatePaymentStatus(
     orderId: string,
@@ -202,8 +208,12 @@ export class OrderService {
     paymentId?: string,
   ): Promise<void> {
     await pool.query(
-      `UPDATE orders 
-       SET status = $1 ,payment_status = $1, payment_id = $2, payment_method = $3, updated_at = CURRENT_TIMESTAMP 
+      `UPDATE orders
+       SET payment_status = $1,
+           status = CASE WHEN $1 = 'paid' THEN 'processing' ELSE status END,
+           payment_id = $2,
+           payment_method = $3,
+           updated_at = CURRENT_TIMESTAMP
        WHERE id = $4`,
       [paymentStatus, paymentId, paymentMethod, orderId],
     );
@@ -214,91 +224,54 @@ export class OrderService {
   }
 
   /**
-   * Create order from quote (used when accepting quote)
+   * Set the shipping address of an order the user owns.
+   * The address is also saved to the address book when the user has none yet.
    */
-  static async createOrderFromQuote(
+  async updateShippingAddress(
     userId: string,
-    quoteId: string,
-    totalPrice: number,
+    orderId: string,
+    address: ShippingAddress,
   ): Promise<void> {
-    const client = await pool.connect();
+    const result = await pool.query(
+      `UPDATE orders
+       SET shipping_name = $1, shipping_address = $2, shipping_city = $3,
+           shipping_postal_code = $4, shipping_country = $5, updated_at = CURRENT_TIMESTAMP
+       WHERE id = $6 AND user_id = $7`,
+      [
+        `${address.firstName} ${address.lastName}`,
+        this.formatStreet(address),
+        address.city,
+        address.zip,
+        address.country,
+        orderId,
+        userId,
+      ],
+    );
 
-    try {
-      await client.query("BEGIN");
+    if (result.rowCount === 0) {
+      throw new HttpError(404, "Order not found");
+    }
 
-      const date = new Date();
-      const dateStr = date.toISOString().slice(0, 10).replace(/-/g, "");
-      const randomNum = Math.floor(1000 + Math.random() * 9000);
-      const orderNumber = `ORD-${dateStr}-${randomNum}`;
-
-      await client.query(
-        `INSERT INTO orders (
-          user_id, quote_id, order_number, total_amount, status, payment_status,
-          shipping_name, shipping_address, shipping_city, shipping_postal_code, shipping_country
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
-        [
-          userId,
-          quoteId,
-          orderNumber,
-          totalPrice,
-          "pending",
-          "pending",
-          null,
-          null,
-          null,
-          null,
-          null,
-        ],
-      );
-
-      await client.query("COMMIT");
-
-      console.log(`✅ Order created from quote ${quoteId} for user ${userId}`);
-    } catch (error) {
-      await client.query("ROLLBACK");
-      console.error("Error creating order from quote:", error);
-    } finally {
-      client.release();
+    const existing = (await this.addressService.checkAddressForUserOrder(
+      userId,
+    )) as Address[] | undefined;
+    if (!existing || existing.length === 0) {
+      await this.addressService.addAddress(userId, {
+        firstName: address.firstName,
+        lastName: address.lastName,
+        address: address.address,
+        addressInfo: address.addressInfo ?? "",
+        city: address.city,
+        zip: address.zip,
+        country: address.country,
+        isPrimary: address.isPrimary ?? false,
+      });
     }
   }
 
-  async updateShippingAddress(orderId: string, address: any): Promise<void> {
-    let addressService = new AddressService();
-    const name = address.name + " " + address.surname;
-    const street = address.address;
-    const addressInfo = address.addressInfo;
-    const city = address.city;
-    const postalCode = address.zip;
-    const country = address.country;
-    const isPrimary = address.default;
-
-    await pool.query(
-      `UPDATE orders 
-       SET shipping_name = $1, shipping_address = $2, shipping_city = $3, shipping_postal_code = $4, shipping_country = $5, updated_at = CURRENT_TIMESTAMP 
-       WHERE id = $6`,
-      [name, street, city, postalCode, country, orderId],
-    );
-    const userId = await pool.query(
-      `SELECT user_id FROM orders WHERE id = $1`,
-      [orderId],
-    );
-    const userAddrInfo = await addressService.checkAddressForUserOrder(
-      userId.rows[0].user_id,
-    );
-    if (userAddrInfo.length === 0) {
-      let addressData: Address = {
-        firstName: address.name,
-        lastName: address.surname,
-        address: street,
-        addressInfo: addressInfo,
-        city: city,
-        zip: postalCode,
-        country: country,
-        isPrimary: isPrimary,
-      };
-      addressService.addAddress(userId.rows[0].user_id, addressData);
-
-      console.log(`✅ Order ${orderId} shipping address updated`);
-    }
+  private formatStreet(address: ShippingAddress): string {
+    return address.addressInfo
+      ? `${address.address}, ${address.addressInfo}`
+      : address.address;
   }
 }
