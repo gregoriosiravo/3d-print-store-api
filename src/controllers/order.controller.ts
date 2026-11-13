@@ -12,6 +12,10 @@ function sendError(res: Response, error: unknown, fallback: string) {
   if (error instanceof HttpError) {
     return res.status(error.status).json({ error: error.message });
   }
+  // Stripe rejected the request (for example a payment that cannot be refunded)
+  if (String((error as any)?.type ?? "").startsWith("Stripe")) {
+    return res.status(400).json({ error: (error as Error).message });
+  }
   console.error(fallback, error);
   return res.status(500).json({ error: fallback });
 }

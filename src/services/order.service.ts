@@ -8,6 +8,7 @@ import { Address } from "../types/address.types";
 import { EmailService } from "./email.service";
 import { AddressService } from "./address.service";
 import { HttpError } from "../utils/http-error";
+import { stripe } from "../config/stripe";
 
 export class OrderService {
   private emailService: EmailService;
@@ -186,29 +187,53 @@ export class OrderService {
   }
 
   /**
-   * Cancel an unpaid order the user owns. Paid orders need a refund, which is not built yet.
+   * Cancel an order the user owns. A paid order is refunded through Stripe first.
+   * The row is locked so a double click cannot refund twice.
    */
   async cancelOrder(userId: string, orderId: string): Promise<void> {
-    const result = await pool.query(
-      `UPDATE orders
-       SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP
-       WHERE id = $1 AND user_id = $2
-         AND payment_status <> 'paid'
-         AND status NOT IN ('cancelled', 'shipped', 'completed')`,
-      [orderId, userId],
-    );
-    if (result.rowCount) return;
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
 
-    const order = await this.getOrder(userId, orderId);
-    if (!order) {
-      throw new HttpError(404, "Order not found");
+      const found = await client.query(
+        `SELECT status, payment_status, payment_id FROM orders
+         WHERE id = $1 AND user_id = $2 FOR UPDATE`,
+        [orderId, userId],
+      );
+      const order = found.rows[0];
+      if (!order) {
+        throw new HttpError(404, "Order not found");
+      }
+      if (["cancelled", "shipped", "completed"].includes(order.status)) {
+        throw new HttpError(409, "Order can no longer be cancelled");
+      }
+
+      if (order.payment_status === "paid") {
+        if (!order.payment_id) {
+          throw new HttpError(409, "This paid order has no payment to refund");
+        }
+        // The key makes a retry after a failed COMMIT return the same refund instead of a second one
+        await stripe.refunds.create(
+          { payment_intent: order.payment_id, metadata: { orderId } },
+          { idempotencyKey: `refund-${orderId}` },
+        );
+      }
+
+      await client.query(
+        `UPDATE orders
+         SET status = 'cancelled',
+             payment_status = CASE WHEN payment_status = 'paid' THEN 'refunded' ELSE payment_status END,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE id = $1`,
+        [orderId],
+      );
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
     }
-    throw new HttpError(
-      409,
-      order.payment_status === "paid"
-        ? "Paid orders cannot be cancelled"
-        : "Order can no longer be cancelled",
-    );
   }
 
   /**
