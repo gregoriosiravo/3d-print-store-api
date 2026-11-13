@@ -1,5 +1,7 @@
 # 3D Print Shop - Backend API
 
+> Full documentation (endpoints, UML, database schema): [docs/README.md](docs/README.md)
+
 Express.js + TypeScript REST API for a 3D printing ecommerce platform. Handles STL file uploads, automatic pricing calculations, user authentication, and order management.
 
 ## 🚀 Features
