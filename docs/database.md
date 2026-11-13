@@ -180,7 +180,7 @@ A layer height and infill combination, plus `time_multiplier`, which scales prin
 
 ### quotes
 
-One row per priced upload. It stores the STL measurements, the chosen material and config, and the price breakdown at the time of the quote. Quotes expire after seven days (`expires_at`), and expiry is checked when a quote is approved. `status` starts as `pending`; approving or accepting a quote sets it to `accepted`. Only `pending` quotes can be approved or rejected.
+One row per priced upload. It stores the STL measurements, the chosen material and config, and the price breakdown at the time of the quote. Quotes expire after seven days (`expires_at`). `status` starts as `pending`; approving or accepting a quote sets it to `accepted`. A pending quote past `expires_at` is set to `expired` by a job that runs at startup and hourly, and that job also removes the quote's upload. Only `pending` quotes can be approved or rejected.
 
 ### orders
 
@@ -198,7 +198,7 @@ Designed for pre-printed products (stock, images, dimensions). No endpoint reads
 | addresses | partial unique `(user_id) WHERE is_primary` | One primary address per user |
 | payment_methods | unique `stripe_payment_method_id`, partial unique `(user_id) WHERE is_default`, check `exp_month` 1 to 12 | Card references |
 | print_configs | check `infill_percentage` 0 to 100 | Valid infill |
-| orders | unique `order_number` | Human-readable order number |
+| orders | unique `order_number` | Human-readable order number. Cancelled orders keep their row with status `cancelled` |
 | quotes, orders | indexes on `user_id`, `status` (and `session_id` on quotes) | Lookups by user and status |
 | payment_methods | index on `user_id` | Lookups by user |
 
@@ -222,4 +222,4 @@ Migrations 3 to 6 are already included in `01-schema.sql`, and they are not idem
 
 **Verification performed:** a fresh Postgres 16 container built from `database/init/` was compared with the live database: all columns (including types, nullability, lengths and precision), all indexes, and all foreign keys matched. Row counts differ only where data was added (the live database has five extra print configs from quote requests).
 
-The Prisma model in `prisma/schema.prisma` does not have `users.stripe_customer_id` yet. Nothing at runtime uses the Prisma model, so the SQL in `database/` is the source of truth. A schema change must be made in SQL and then mirrored in `prisma/schema.prisma` if the Prisma CLI is still used.
+The Prisma model in `prisma/schema.prisma` mirrors the same tables, including `users.stripe_customer_id`. Nothing at runtime uses the Prisma client, so the SQL in `database/` is the source of truth. Make schema changes in SQL first, then mirror them in `prisma/schema.prisma`.

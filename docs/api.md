@@ -22,17 +22,20 @@ All errors have the shape `{ "error": "message" }`. A 500 hides its cause from t
 | POST | `/login` | public | `{ email, password }` | 200 `{ token, user }` | 400 missing fields, 401 invalid credentials |
 | POST | `/verify-email` | public | `{ token }` | 200 `{ message }` | 400 missing or expired token |
 | POST | `/resend-verification` | public | `{ email }` | 200 `{ message }` | 400 missing email |
+| POST | `/logout` | public | none | 200 `{ message }` and clears the session cookie | none |
 | GET | `/profile` | Bearer | none | 200 `{ id, email, firstName, lastName, username, ... }` | 401, 404 |
 
 `user` in login and register responses is `{ id, email, firstName, lastName, emailVerified }`. Login does not block unverified users; it returns `emailVerified` so the client can decide.
 
 Tokens are signed with `JWT_SECRET`, carry `{ userId, email }`, and expire after `JWT_EXPIRES_IN` (default 7 days). Passwords are hashed with bcrypt, 10 rounds.
 
+Register and login also set the session cookie `auth_token`: `HttpOnly`, `SameSite=Strict`, `Secure` in production, 7 days. Page scripts cannot read it, and the browser sends it back with `credentials: "include"`. Protected routes accept the cookie or a Bearer header (API clients).
+
 ### Quotes (`/api`)
 
 | Method | Path | Auth | Input | Success | Errors |
 |---|---|---|---|---|---|
-| POST | `/quote` | optional | multipart: `stl` (file, `.stl`, max 50 MB), `materialId`, `layerHeight` (`0.1`, `0.2`, `0.3`), `infillDensity` (integer 1 to 100) | 200 quote (below) | 400 missing or unsupported fields, non-STL file, file too large; 500 parse or pricing failure |
+| POST | `/quote` | optional | multipart: `stl` (file, `.stl`, max 50 MB), `materialId`, `layerHeight` (`0.1`, `0.2`, `0.3`), `infillDensity` (integer 1 to 100), optional header `x-session-id` | 200 quote (below) | 400 missing or unsupported fields, non-STL file, file too large; 429 more than `QUOTE_RATE_LIMIT` uploads per IP in 15 minutes; 500 parse or pricing failure (the upload is removed) |
 | GET | `/quote/:quoteId` | optional | none | 200 raw `quotes` row | 404 not found, malformed ID, or owned by another user |
 | GET | `/quotes` | Bearer | none | 200 `{ quotes: [...] }` with `material_name` and `config_name` | 401 |
 | POST | `/quote/associate` | Bearer | `{ quoteId }` (a `userId` in the body is ignored) | 200 `{ message }` | 400 `quoteId` not a UUID, 404 not found or already owned |
@@ -58,6 +61,8 @@ Quote creation response:
 
 Quotes expire seven days after creation and start with status `pending`. A quote becomes `accepted` when it is approved or accepted into an order. Only `pending` quotes can be approved, accepted, or rejected.
 
+A pending quote past `expires_at` becomes `expired`. This happens at startup and then hourly, and the job removes the quote's upload. Until the job runs, `GET /api/quotes` already shows such a quote as `expired`. Rejecting a quote deletes its upload too.
+
 **Approve versus accept:** approve takes no shipping address and is what the UI uses ("Accept" on the profile page and "Order now"). The address is set afterwards at checkout with `PATCH /orders/:orderId/address`. Accept-quote (below) can take the address up front; no UI calls it.
 
 ### Orders (`/api/orders`)
@@ -66,6 +71,7 @@ Quotes expire seven days after creation and start with status `pending`. A quote
 |---|---|---|---|---|---|
 | POST | `/orders/accept-quote` | Bearer | `{ quoteId, shippingAddress? }`, where `shippingAddress` is the address shape below | 201 order (below) | 400 missing or malformed `quoteId`, or an address without the required fields; 403, 404, 409, 410 as for approve |
 | GET | `/orders` | Bearer | optional `?orderId=` | 200 array, or one order when `orderId` is given | 404 for `orderId` (not found, not owned, or malformed) |
+| POST | `/orders/:orderId/cancel` | Bearer | none | 200 `{ message }` | 404 order not found, not owned, or malformed ID; 409 already paid, cancelled, shipped or completed |
 | POST | `/orders/:orderId/pay` | Bearer | none | 200 `{ clientSecret }` | 404 order not found or not owned, 400 already paid, 500 Stripe failure |
 | PATCH | `/orders/:orderId/address` | Bearer | address (below) | 200 `{ message }` | 400 invalid address, 404 order not found or not owned |
 
@@ -118,7 +124,9 @@ All routes need Bearer. `:userId` must match the token's user (403 otherwise).
 | PATCH | `/addresses/:addressId/primary` | none | 200 `{ message }` |
 | DELETE | `/addresses/:addressId` | none | 200 `{ message }` |
 
-Only one address per user can be primary (partial unique index). Setting a second primary fails in the database and the error is logged, not returned (see open issues).
+Only one address per user can be primary. Setting a new primary clears the old one in the same transaction.
+
+Errors: `POST /add` and `PUT /edit` return 400 when a required field is missing. `PUT`, `PATCH /primary` and `DELETE` return 404 when the address ID is malformed or is not one of the user's addresses. Database failures return 500 with a generic message. Nothing is reported as saved when it was not.
 
 ### Payment methods (`/api/payment-methods`)
 
@@ -234,11 +242,21 @@ classDiagram
         +acceptQuote()
         +getOrder()
         +getUserOrders()
+        +cancelOrder()
         +updatePaymentStatus()
         +updateShippingAddress()
     }
+    class QuoteCleanupService {
+        +expirePendingQuotes()
+        +removeUpload()
+    }
+    class SessionCookie {
+        +setSessionCookie()
+        +clearSessionCookie()
+        +readToken()
+    }
     class AddressService {
-        +getUserAdresses()
+        +getUserAddresses()
         +addAddress()
         +editAddress()
         +setPrimaryAddress()
@@ -278,6 +296,10 @@ classDiagram
     QuoteController --> PricingService
     QuoteController --> OrderService : approve
     OrderController --> OrderService
+    App --> QuoteCleanupService : startup and hourly expiry
+    QuoteController --> QuoteCleanupService : remove upload
+    AuthController --> SessionCookie : set or clear cookie
+    authenticate ..> SessionCookie : read cookie
     webhookController --> OrderService
     AuthController --> AuthService
     AuthService --> EmailService
@@ -409,15 +431,14 @@ sequenceDiagram
     participant DB as PostgreSQL
 
     U->>UI: email and password
-    UI->>API: POST /api/auth/login
+    UI->>API: POST /api/auth/login (credentials include)
     API->>AS: login(email, password)
     AS->>DB: SELECT users WHERE email
     AS->>AS: bcrypt.compare
     AS-->>API: { token, user }
-    API-->>UI: 200 { token, user }
-    UI->>UI: store token in cookie auth_token (3 days)
-    UI->>API: GET /api/auth/profile (Authorization: Bearer)
-    API->>API: authenticate: jwt.verify, set req.user
+    API-->>UI: 200 { token, user } and Set-Cookie auth_token (HttpOnly, SameSite=Strict)
+    UI->>API: GET /api/auth/profile (cookie sent automatically)
+    API->>API: authenticate: read cookie or Bearer, jwt.verify, set req.user
     API->>DB: SELECT users WHERE id
     API-->>UI: 200 profile
 ```

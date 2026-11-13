@@ -13,7 +13,7 @@ Express 5 + TypeScript REST API for the PrintFlow 3D store. It parses uploaded S
 | Uploads | Multer (disk storage in `uploads/stl-files`, STL only, 50 MB limit) |
 | STL parsing | `node-stl` (volume, surface area, bounding box) |
 | Database | PostgreSQL 16 through the `pg` pool (`src/config/database.ts`) with SQL. Nothing imports the Prisma client at runtime |
-| Auth | bcrypt (10 rounds), JWT (`jsonwebtoken`, 7 days by default), `Authorization: Bearer` header |
+| Auth | bcrypt (10 rounds), JWT (`jsonwebtoken`, 7 days by default). Browsers get an HttpOnly, SameSite=Strict session cookie; API clients can send `Authorization: Bearer` |
 | Payments | Stripe: PaymentIntents for orders (EUR), SetupIntents and saved cards for payment methods, webhook for `payment_intent.succeeded` |
 | Email | Nodemailer over SMTP (verification, welcome, order confirmation) |
 
@@ -26,8 +26,8 @@ src/
   routes/                # URL -> middleware -> controller method
   middleware/            # authenticate (required JWT), optionalAuth (JWT if present)
   controllers/           # HTTP layer: validate input, map errors to status codes
-  services/              # business logic and SQL
-  utils/                 # HttpError (status-carrying error), isUuid
+  services/              # business logic and SQL; quote-cleanup.service expires quotes and removes uploads
+  utils/                 # HttpError, isUuid, address field check, session cookie helpers
   config/                # pg pool, Stripe client, Prisma client (prisma.ts is not imported)
   types/                 # request/response interfaces
   generated/prisma/      # Prisma client (generated, do not edit)
@@ -35,7 +35,8 @@ database/
   init/01-schema.sql     # full schema for a new Docker volume
   init/02-seed.sql       # materials and print configs
   migration/*.sql        # incremental changes, applied in order (see database.md)
-prisma/schema.prisma     # Prisma model of the database (not kept in sync, see open issues)
+prisma/schema.prisma     # Prisma model of the database (kept in step with the SQL)
+test/                    # node:test suite: unit tests and HTTP tests against a running API
 ```
 
 Layering rule the code follows: routes do not touch SQL, controllers do not build SQL, services hold the logic. Services throw `HttpError` for expected failures (not found, not owned, already used, expired); controllers turn it into the matching status code.
@@ -60,7 +61,15 @@ cp .env.example .env     # then fill in the values below
 npm run dev              # http://localhost:4000
 ```
 
-Other scripts: `npm run build` (tsc), `npm start` (runs `dist/server.js`), `npm run type-check`. There is no automated test suite yet (see open issues).
+Other scripts: `npm run build` (tsc), `npm start` (runs `dist/server.js`), `npm run type-check`.
+
+Tests run inside the API container while it is up, because the HTTP tests call the running API and use the database:
+
+```bash
+docker compose exec api npm test
+```
+
+The HTTP tests tag every user and quote they create with a run stamp (`probe-<stamp>@example.com` and the quote session `probe-<stamp>`). Cleanup deletes by that stamp, dependent rows first, and reports the counts. They also write real verification emails through the configured SMTP account (see open issues).
 
 ## Configuration
 
@@ -77,6 +86,7 @@ Other scripts: `npm run build` (tsc), `npm start` (runs `dist/server.js`), `npm 
 | `MARKUP_PERCENTAGE` | pricing | Markup on subtotal, default 30 |
 | `STRIPE_SECRET_KEY` | Stripe client | Server-side Stripe key (test or live mode) |
 | `STRIPE_WEBHOOK_SECRET` | webhook | Verifies `Stripe-Signature` |
+| `QUOTE_RATE_LIMIT` | `POST /api/quote` | Uploads allowed per IP per 15 minutes, default 60 |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASSWORD`, `EMAIL_FROM`, `EMAIL_FROM_NAME` | email | Outgoing mail |
 
 Variables present in `.env` but not read by the code: `MATERIAL_COST_PER_GRAM` and the `AWS_*` / `S3_*` values (no S3 integration exists; `quotes.s3_key` stores the local upload path).
@@ -84,43 +94,34 @@ Variables present in `.env` but not read by the code: `MATERIAL_COST_PER_GRAM` a
 ## Conventions
 
 - Success responses are JSON. Errors are `{ "error": "message" }` everywhere, including upload and JSON body errors. The 500 responses use a fixed message and log the cause on the server.
-- Protected routes need `Authorization: Bearer <jwt>`. `authenticate` returns 401 when the token is missing or invalid.
+- Protected routes accept the `auth_token` session cookie or `Authorization: Bearer <jwt>`. `authenticate` returns 401 when neither is valid.
 - Quote, order and payment-method routes check that an ID is a UUID before querying. A malformed ID returns 404 (or 400 for a body field), never a 500. Address routes do not do this check (see open issues).
 - Address and payment-method routes also check ownership: a row that belongs to another user is reported as not found (404), except address routes, which return 403 when `:userId` is not the token's user.
+- Uploads are limited per IP (`QUOTE_RATE_LIMIT`) and answer 429 when exceeded. Uploads that fail to parse or price are deleted from disk.
 - Money values are numbers rounded to 2 decimals. Weights are grams, volumes cm³, time minutes.
 - A quote's price is set when it is created and never comes from the client. Accepting or approving a quote uses the stored total.
 
-## Changes in this revision
+## Recent changes
 
-Each item was reproduced or verified with a request against the running API.
+Each item was checked against the running API (HTTP requests or the test suite).
 
-| Area | Before | Now | Where |
-|---|---|---|---|
-| Payment methods | Routes not mounted; controller methods for list, default and delete were empty; save called the service with the wrong arguments | All five routes mounted and implemented; one Stripe customer per user | `routes/payment-method.route.ts`, `services/payment-method.service.ts`, `controllers/payment-methods.controller.ts`, `app.ts` |
-| Approving a quote | Created an order before checking ownership; took the price from the request body; not awaited | Checks ownership, uses the stored price, returns the new order (201) | `controllers/quote.controller.ts` `approveQuote`, `services/order.service.ts` `acceptQuote` |
-| Double order | A quote could be accepted many times (status `accepted` was never checked) | Quote row locked (`FOR UPDATE`); only `pending` quotes can be accepted; repeat gives 409 | `services/order.service.ts` |
-| Quote visibility | Any caller with the UUID could read any quote | Owned quotes return 404 to other users; guest quotes stay readable by UUID | `controllers/quote.controller.ts` `getQuote` |
-| Associating a guest quote | Owner taken from the request body | Owner taken from the token; body `userId` is ignored | `controllers/quote.controller.ts` `associateQuoteWithUser` |
-| Shipping address update | No ownership check; stored `undefined undefined` as the name because it read `name`/`surname` | Ownership checked in SQL (404 otherwise); reads the form fields `firstName`, `lastName`, `zip` and so on | `services/order.service.ts` `updateShippingAddress`, `controllers/order.controller.ts` |
-| Errors | Every accept-quote failure was a 500 | Expired 410, used 409, not owned 403, not found 404 | `utils/http-error.ts`, controllers |
-| Pay for a missing order | Service threw, so 500 | 404 | `services/order.service.ts` `getOrder` returns null |
-| Payment status | Paid also overwrote the order `status` with `paid` | Paid sets `payment_status = paid` and `status = processing` | `services/order.service.ts` `updatePaymentStatus` |
-| Upload errors | Multer errors reached Express's default page (HTML 500) | JSON 400, `File too large (maximum 50 MB)` for oversize files | `app.ts` error handler |
-| Stripe webhook | Logged the full event object, including card and customer data | Logs the event type only; ignores events without an order ID | `controllers/stripe.controller.ts` |
-| Debug output | Logged shipping bodies and webhook payloads | Removed | `controllers/order.controller.ts`, `controllers/stripe.controller.ts` |
-| Shipping shape | Accept-quote used `name`/`postalCode`; the address form used `firstName`/`zip` | One shape everywhere: `firstName`, `lastName`, `address`, `addressInfo`, `city`, `zip`, `country`, `isPrimary` | `types/order.types.ts` |
-| Malformed IDs | PostgreSQL rejected them and the API returned 500 | 404 (400 for body fields) | `utils/is-uuid.ts` and controllers |
-| Schema init | Fresh volumes lacked the verification columns and the address and payment tables | `01-schema.sql` matches the live database column for column, index for index, foreign key for foreign key (checked against a fresh container) | `database/init/01-schema.sql`, `database/migration/07-add-users-stripe-customer-id.sql` |
+| Area | Change | Where |
+|---|---|---|
+| Session | The API sets an HttpOnly, SameSite=Strict cookie on register and login, and `POST /api/auth/logout` clears it. The browser no longer reads or sends a token itself. CORS allows credentials for the frontend origin | `utils/session.ts`, `controllers/auth.controller.ts`, `middleware/auth.middleware.ts`, `app.ts` |
+| Orders | Unpaid orders can be cancelled once (`POST /api/orders/:id/cancel`). Paid orders return 409 because refunds are not built | `services/order.service.ts` `cancelOrder` |
+| Addresses | Address writes now throw on failure. Setting a primary address clears the others in the same transaction. Missing or malformed IDs return 404, and bad bodies return 400 | `services/address.service.ts`, `controllers/address.controller.ts` |
+| Quotes | Pending quotes past `expires_at` are marked `expired` at startup and then hourly, and their uploads are removed. The quote list shows an overdue pending quote as expired at once. Rejecting a quote removes its upload. A failed parse removes the upload it came from | `services/quote-cleanup.service.ts`, `server.ts`, `controllers/quote.controller.ts` |
+| Uploads | `POST /api/quote` is rate limited per IP (`express-rate-limit`) | `routes/quote.route.ts` |
+| Schema | The Prisma model has `users.stripe_customer_id` | `prisma/schema.prisma` |
+| Dependencies | Non-breaking audit fixes applied. Four high findings remain (see open issues) | `package-lock.json` |
+| Tests | 32 HTTP and unit tests with stamp-based cleanup | `test/` |
 
 ## Open issues
 
-These are real gaps that were not changed in this revision.
+These are real gaps that were not changed.
 
-1. **No automated tests.** The checks used during this revision were manual HTTP requests against the running API. Adding a test runner (for example Vitest with a throwaway database) is the next step.
-2. **Uploaded STL files are never deleted.** A rejected or expired quote leaves its file in `uploads/stl-files`, and `POST /api/quote` has no rate limit, so the folder grows without bound.
-3. **Prisma model is missing a column.** `prisma/schema.prisma` has no `users.stripe_customer_id`. Nothing at runtime uses the Prisma model, so this only affects the Prisma CLI and generated types.
-4. **Order cancellation is not possible.** The profile page's delete button for orders is a stub, and no endpoint exists to cancel or delete an order.
-5. **Quote expiry is checked only when accepting.** Expired quotes stay in the list and in `GET /api/quotes` with status `pending`.
-6. **The session cookie is readable from JavaScript.** `auth_token` is set by the UI without `HttpOnly`, so any script on the page can read the JWT.
-7. **Guest quotes are reachable by UUID.** This is intended (the UUID is the link the guest keeps), but anyone who has the link can read and approve the quote until it expires.
-8. **Address errors are hidden.** `services/address.service.ts` catches its database errors and only logs them, so `POST /add`, `PUT /edit`, `PATCH /primary` and `DELETE` return success even when nothing was saved (for example a second primary address, or an unknown address ID). The address routes also skip the UUID check. Fix: let the service throw, and map errors in `controllers/address.controller.ts`.
+1. **Four high-severity audit findings remain.** `npm audit --omit=dev` reports `nodemailer` (fix needs 10.x) and `prisma` with `@prisma/config` and `deepmerge-ts` (fix needs Prisma 7). Both fixes are major-version upgrades with possible breaking changes, so they need a decision.
+2. **The test suite sends real email.** Each run registers users, and registration sends a verification email through the configured SMTP account. The addresses are `example.com`, so they do not deliver, but they count against the account.
+3. **Rate limiting uses the connection address.** Behind a reverse proxy every client shares one address until `trust proxy` is configured.
+4. **Paid orders cannot be cancelled or refunded.** There is no refund path. The profile page offers Cancel on every order that is not accepted; for a paid order the API answers 409 and the page shows an alert. A customer who has paid has no self-service way out.
+5. **Quote expiry happened once on existing data.** When the expiry job first ran against the live database it marked six overdue quotes from February to July as expired and deleted their upload files. The quotes could not be ordered anyway, but the files are gone and cannot be restored.
