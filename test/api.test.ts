@@ -3,6 +3,9 @@ import assert from "node:assert/strict";
 import { promises as fs } from "fs";
 import { call, cleanupProbeRows, db, register, SESSION_ID, uploadCube, uploadPath, STAMP } from "./helpers";
 import { expirePendingQuotes } from "../src/services/quote-cleanup.service";
+import Stripe from "stripe";
+
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY as string, { apiVersion: "2026-02-25.clover" });
 
 // Integration tests against a running API (docker compose up). Rows are tagged with STAMP.
 let alice: { token: string; id: string };
@@ -161,16 +164,43 @@ describe("orders", () => {
     assert.equal(rows[0].shipping_address, "Via Roma 1, Int 4");
   });
 
-  it("an unpaid order can be cancelled once; a paid order cannot", async () => {
+  it("an unpaid order can be cancelled once", async () => {
     const quote = await ownQuote();
     const order = (await call("POST", `/quote/${quote.quoteId}/approve`, { token: alice.token })).body;
     assert.equal((await call("POST", `/orders/${order.orderId}/cancel`, { token: alice.token })).status, 200);
     assert.equal((await call("POST", `/orders/${order.orderId}/cancel`, { token: alice.token })).status, 409);
+  });
 
-    const paid = await ownQuote();
-    const paidOrder = (await call("POST", `/quote/${paid.quoteId}/approve`, { token: alice.token })).body;
-    await db.query("UPDATE orders SET payment_status = 'paid' WHERE id = $1", [paidOrder.orderId]);
-    assert.equal((await call("POST", `/orders/${paidOrder.orderId}/cancel`, { token: alice.token })).status, 409);
+  it("a paid order is refunded through Stripe on cancel, once", async () => {
+    const quote = await ownQuote();
+    const order = (await call("POST", `/quote/${quote.quoteId}/approve`, { token: alice.token })).body;
+    // A real succeeded PaymentIntent in Stripe test mode, so the refund is real
+    const intent = await stripe.paymentIntents.create({
+      amount: 1100,
+      currency: "eur",
+      payment_method: "pm_card_visa",
+      confirm: true,
+      automatic_payment_methods: { enabled: true, allow_redirects: "never" },
+      metadata: { probe: STAMP },
+    });
+    await db.query("UPDATE orders SET payment_status = 'paid', payment_id = $1 WHERE id = $2", [intent.id, order.orderId]);
+
+    const cancel = await call("POST", `/orders/${order.orderId}/cancel`, { token: alice.token });
+    assert.equal(cancel.status, 200, JSON.stringify(cancel.body));
+    const refunds = await stripe.refunds.list({ payment_intent: intent.id });
+    assert.equal(refunds.data.length, 1);
+
+    const row = await db.query("SELECT status, payment_status FROM orders WHERE id = $1", [order.orderId]);
+    assert.deepEqual(row.rows[0], { status: "cancelled", payment_status: "refunded" });
+    assert.equal((await call("POST", `/orders/${order.orderId}/cancel`, { token: alice.token })).status, 409);
+    assert.equal((await stripe.refunds.list({ payment_intent: intent.id })).data.length, 1);
+  });
+
+  it("a paid order with no payment on record cannot be cancelled", async () => {
+    const quote = await ownQuote();
+    const order = (await call("POST", `/quote/${quote.quoteId}/approve`, { token: alice.token })).body;
+    await db.query("UPDATE orders SET payment_status = 'paid' WHERE id = $1", [order.orderId]);
+    assert.equal((await call("POST", `/orders/${order.orderId}/cancel`, { token: alice.token })).status, 409);
   });
 
   it("order routes return 404 for malformed IDs and for other users' orders", async () => {
@@ -212,5 +242,19 @@ describe("payment methods (without calling Stripe)", () => {
     assert.equal((await call("PUT", "/payment-methods/not-a-uuid/default", { token: bob.token })).status, 404);
     assert.equal((await call("DELETE", "/payment-methods/00000000-0000-0000-0000-000000000000", { token: bob.token })).status, 404);
     assert.equal((await call("POST", "/payment-methods/save", { token: bob.token, body: {} })).status, 400);
+  });
+});
+
+describe("catalog", () => {
+  it("lists available materials and the named print presets publicly", async () => {
+    const materials = await call("GET", "/materials");
+    assert.equal(materials.status, 200);
+    assert.ok(materials.body.length >= 1);
+    assert.ok(materials.body.every((m: any) => typeof m.name === "string" && typeof m.type === "string"));
+
+    const presets = await call("GET", "/print-presets");
+    assert.equal(presets.status, 200);
+    assert.ok(presets.body.length >= 1);
+    assert.ok(presets.body.every((p: any) => !/mm \/ /.test(p.name)), "generated combinations are not listed");
   });
 });
