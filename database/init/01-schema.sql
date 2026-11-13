@@ -1,3 +1,6 @@
+-- Full schema as the API expects it (equivalent to init + migrations 03 to 07).
+-- Docker runs this only on an empty volume; keep it in step with database/migration/.
+
 -- Enable UUID extension
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
@@ -5,10 +8,14 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE TABLE users (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     email VARCHAR(255) UNIQUE NOT NULL,
-    username VARCHAR(255) UNIQUE NOT NULL,
+    username VARCHAR(255) UNIQUE,
     password_hash VARCHAR(255) NOT NULL,
     first_name VARCHAR(100),
     last_name VARCHAR(100),
+    email_verified BOOLEAN DEFAULT false,
+    verification_token VARCHAR(255),
+    verification_token_expires TIMESTAMP,
+    stripe_customer_id VARCHAR(255) UNIQUE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -25,7 +32,7 @@ CREATE TABLE materials (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- Print configurations
+-- Print configurations (layer height and infill combinations)
 CREATE TABLE print_configs (
     id SERIAL PRIMARY KEY,
     name VARCHAR(100) NOT NULL,
@@ -43,26 +50,26 @@ CREATE TABLE quotes (
     session_id VARCHAR(255), -- For non-authenticated users
     user_id UUID REFERENCES users(id) ON DELETE SET NULL,
     stl_filename VARCHAR(255) NOT NULL,
-    s3_key VARCHAR(500) NOT NULL,
-    
+    s3_key VARCHAR(500) NOT NULL, -- holds the local upload path (no S3 yet)
+
     -- STL analysis results
     volume_cm3 DECIMAL(12, 4) NOT NULL,
     surface_area_cm2 DECIMAL(12, 4),
     bounding_box_x DECIMAL(10, 2),
     bounding_box_y DECIMAL(10, 2),
     bounding_box_z DECIMAL(10, 2),
-    
+
     -- Print settings
     material_id INTEGER REFERENCES materials(id),
     print_config_id INTEGER REFERENCES print_configs(id),
-    
+
     -- Pricing breakdown
     material_cost DECIMAL(10, 2),
     machine_cost DECIMAL(10, 2),
     labor_cost DECIMAL(10, 2),
     total_price DECIMAL(10, 2) NOT NULL,
     estimated_print_time_minutes INTEGER,
-    
+
     -- Status
     status VARCHAR(50) DEFAULT 'pending', -- pending, accepted, expired, ordered
     expires_at TIMESTAMP,
@@ -75,24 +82,24 @@ CREATE TABLE orders (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     user_id UUID REFERENCES users(id) ON DELETE SET NULL,
     quote_id UUID REFERENCES quotes(id),
-    
+
     -- Order details
     order_number VARCHAR(50) UNIQUE NOT NULL,
     total_amount DECIMAL(10, 2) NOT NULL,
     status VARCHAR(50) DEFAULT 'pending', -- pending, processing, printing, completed, shipped, cancelled
-    
+
     -- Shipping info
     shipping_name VARCHAR(200),
     shipping_address TEXT,
     shipping_city VARCHAR(100),
     shipping_postal_code VARCHAR(20),
     shipping_country VARCHAR(100),
-    
+
     -- Payment
-    payment_status VARCHAR(50) DEFAULT 'pending',
+    payment_status VARCHAR(50) DEFAULT 'pending', -- pending, paid
     payment_method VARCHAR(50),
     payment_id VARCHAR(255), -- Stripe payment intent ID
-    
+
     -- Timestamps
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -106,22 +113,22 @@ CREATE TABLE products (
     description TEXT,
     category VARCHAR(100),
     price DECIMAL(10, 2) NOT NULL,
-    
+
     -- Product details
     material_id INTEGER REFERENCES materials(id),
     weight_grams INTEGER,
     dimensions_x DECIMAL(10, 2),
     dimensions_y DECIMAL(10, 2),
     dimensions_z DECIMAL(10, 2),
-    
+
     -- Inventory
     stock_quantity INTEGER DEFAULT 0,
     is_available BOOLEAN DEFAULT true,
-    
+
     -- Images
     primary_image_url TEXT,
     images JSONB, -- Array of image URLs
-    
+
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -137,7 +144,38 @@ CREATE TABLE order_items (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- Indexes for performance
+-- Saved shipping addresses
+CREATE TABLE addresses (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    is_primary BOOLEAN NOT NULL DEFAULT FALSE,
+    label VARCHAR(50),           -- e.g. 'Home', 'Work', 'Billing'
+    address VARCHAR(255),
+    address_info VARCHAR(255),
+    city VARCHAR(255),
+    country VARCHAR(255),
+    zip VARCHAR(20),
+    first_name VARCHAR(255),
+    last_name VARCHAR(255),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Saved cards (references to Stripe objects, no card numbers)
+CREATE TABLE payment_methods (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    stripe_customer_id VARCHAR(255) NOT NULL,
+    stripe_payment_method_id VARCHAR(255) NOT NULL UNIQUE,
+    brand VARCHAR(50),
+    last4 CHAR(4),
+    exp_month SMALLINT CHECK (exp_month >= 1 AND exp_month <= 12),
+    exp_year SMALLINT,
+    is_default BOOLEAN NOT NULL DEFAULT false,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Indexes for performance and invariants
 CREATE INDEX idx_quotes_user_id ON quotes(user_id);
 CREATE INDEX idx_quotes_session_id ON quotes(session_id);
 CREATE INDEX idx_quotes_status ON quotes(status);
@@ -145,3 +183,6 @@ CREATE INDEX idx_orders_user_id ON orders(user_id);
 CREATE INDEX idx_orders_status ON orders(status);
 CREATE INDEX idx_products_category ON products(category);
 CREATE INDEX idx_products_is_available ON products(is_available);
+CREATE UNIQUE INDEX one_primary_per_user ON addresses (user_id) WHERE is_primary = TRUE;
+CREATE INDEX idx_payment_methods_user_id ON payment_methods(user_id);
+CREATE UNIQUE INDEX payment_methods_one_default_per_user_idx ON payment_methods (user_id) WHERE is_default = TRUE;
