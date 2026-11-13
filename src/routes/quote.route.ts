@@ -3,8 +3,19 @@ import multer from "multer";
 import path from "path";
 import { QuoteController } from "../controllers/quote.controller";
 import { authenticate, optionalAuth } from "../middleware/auth.middleware";
+import { rateLimit } from "express-rate-limit";
 
 const router = Router();
+
+// Uploads write files to disk, so cap how often one client can send them
+const uploadLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: Number(process.env.QUOTE_RATE_LIMIT ?? 60),
+  standardHeaders: "draft-7",
+  legacyHeaders: false,
+  message: { error: "Too many uploads, try again later" },
+});
+
 const quoteController = new QuoteController();
 
 // Configure multer for STL file uploads
@@ -35,6 +46,7 @@ const upload = multer({
 // Routes
 router.post(
   "/quote",
+  uploadLimiter,
   optionalAuth,
   upload.single("stl"),
   quoteController.createQuote.bind(quoteController),

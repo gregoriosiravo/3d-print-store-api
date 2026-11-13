@@ -9,6 +9,7 @@ import { v4 as uuidv4 } from "uuid";
 import { OrderService } from "../services/order.service";
 import { HttpError } from "../utils/http-error";
 import { isUuid } from "../utils/is-uuid";
+import { removeUpload } from "../services/quote-cleanup.service";
 
 const stlParser = new StlParserService();
 const pricingService = new PricingService();
@@ -113,6 +114,7 @@ export class QuoteController {
       });
     } catch (error) {
       console.error("Error creating quote:", error);
+      await removeUpload(req.file?.path);
       res.status(500).json({
         error: "Failed to process STL file",
         details: error instanceof Error ? error.message : "Unknown error",
@@ -160,7 +162,10 @@ export class QuoteController {
       }
 
       const result = await pool.query(
-        `SELECT q.*, m.name as material_name, pc.name as config_name
+        `SELECT q.*,
+           CASE WHEN q.status = 'pending' AND q.expires_at < CURRENT_TIMESTAMP
+                THEN 'expired' ELSE q.status END AS status,
+           m.name as material_name, pc.name as config_name
          FROM quotes q
          LEFT JOIN materials m ON q.material_id = m.id
          LEFT JOIN print_configs pc ON q.print_config_id = pc.id
@@ -222,7 +227,8 @@ export class QuoteController {
         return res.status(404).json({ error: "Quote not found" });
       }
       const result = await pool.query(
-        `DELETE FROM quotes WHERE id = $1 AND user_id = $2 AND status = 'pending'`,
+        `DELETE FROM quotes WHERE id = $1 AND user_id = $2 AND status = 'pending'
+         RETURNING s3_key`,
         [quoteId, req.user.userId],
       );
       if (result.rowCount === 0) {
@@ -230,6 +236,7 @@ export class QuoteController {
           error: "Quote not found, not owned by user, or already ordered",
         });
       }
+      await removeUpload(result.rows[0].s3_key);
       res.json({ message: "Quote declined successfully" });
     } catch (error) {
       console.error("Error declining quote:", error);
