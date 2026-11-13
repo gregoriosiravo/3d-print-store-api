@@ -21,14 +21,13 @@ export const webhookController = {
       return res.status(400).json({ error: "Invalid signature" });
     }
     console.log("📦 Webhook event type:", event.type);
-    console.log(
-      "📦 Webhook event data:",
-      JSON.stringify(event.data.object, null, 2),
-    );
 
     if (event.type === "payment_intent.succeeded") {
       const paymentIntent = event.data.object;
       const orderId = paymentIntent.metadata.orderId;
+      if (!orderId) {
+        return res.json({ received: true });
+      }
       console.log("💳 Processing payment for orderId:", orderId);
       await orderService.updatePaymentStatus(
         orderId,
